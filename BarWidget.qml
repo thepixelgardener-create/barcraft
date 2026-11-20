@@ -89,6 +89,10 @@ BarWidget {
     directory: Qt.resolvedUrl("i18n")
   }
 
+  // The Studio is drawn with the Omarchy UI kit (kit/); this feeds it the
+  // theme the shell draws with.
+  KitTheme {}
+
   Component.onCompleted: Qt.callLater(root.locateEngine)
 
   WidgetButton {

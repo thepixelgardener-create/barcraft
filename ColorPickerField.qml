@@ -1,26 +1,32 @@
 import QtQuick
 import QtQuick.Layouts
-import qs.Commons
-import qs.Commons as Commons
-import qs.Ui
+import "kit/Theme"
+import "kit/Theme" as Kit
+import "kit/Ui" as O
 
-// Palette + HSV picker for the Studio's Colors section. A theme swatch picks
-// a live reference ("theme.blue") that follows theme switches; the creative
-// swatches and the picker pick a fixed "#rrggbb". "" means automatic.
+// The Studio's color chooser, drawn with the Omarchy UI kit: the current
+// color in a ColorWell (press it for the picker), the theme's palette and a
+// set of fixed colors as SwatchStrips, and a saturation/value square over a
+// hue strip. A theme swatch picks a live reference ("theme.blue") that
+// follows theme switches; the fixed swatches and the picker pick "#rrggbb";
+// "" means automatic.
+//
+// The kit's own ColorPicker carries a hex TextField, a TextInput, which reads
+// the whole clipboard on every clipboard change in Qt 6.12.0 (see
+// LineField.qml); a plugin inside the shell keeps those out.
 Column {
   id: root
 
-  property color foreground: Commons.Color.popups.text
-  property color dimForeground: Qt.darker(Commons.Color.popups.text, 1.45)
+  property color foreground: Kit.Color.popups.text
+  property color dimForeground: Kit.Color.textDim
   property string currentValue: ""
   // What currentValue looks like now (resolved by the engine).
   property color resolvedColor: fallbackColor
-  property color fallbackColor: Commons.Color.bar.background
+  property color fallbackColor: Kit.Color.background
   property var themePalette: [] // [{ name, key, hex }] from the active colors.toml
   property string resetLabel: "Theme"
   property var strings: null
   property bool pickerExpanded: false
-  property string hoveredLabel: ""
 
   signal colorPicked(string value)
 
@@ -81,9 +87,9 @@ Column {
   readonly property var themeSwatches: {
     if (themePalette && themePalette.length > 0) return themePalette
     return [
-      { name: "background", key: "background", hex: colorToHex(Commons.Color.background) },
-      { name: "accent", key: "accent", hex: colorToHex(Commons.Color.accent) },
-      { name: "foreground", key: "foreground", hex: colorToHex(Commons.Color.foreground) }
+      { name: "background", key: "background", hex: colorToHex(Kit.Color.background) },
+      { name: "accent", key: "accent", hex: colorToHex(Kit.Color.accent) },
+      { name: "foreground", key: "foreground", hex: colorToHex(Kit.Color.foreground) }
     ]
   }
 
@@ -102,41 +108,49 @@ Column {
     return currentValue.toUpperCase()
   }
 
-  // Current value, reset, and the picker toggle.
+  // As many swatches to a strip as the width holds.
+  readonly property int perStrip: Math.max(4, Math.floor(width / (Style.space(22) + (Style.spacing.xxs + Math.max(1, Style.space(2))) * 2 + Style.spacing.xxs)))
+
+  function chunks(list) {
+    var out = []
+    for (var i = 0; i < list.length; i += perStrip) out.push({ start: i, items: list.slice(i, i + perStrip) })
+    return out
+  }
+
+  // The current color, what it is, and the way back to automatic.
   RowLayout {
     width: parent.width
-    spacing: Style.spacing.sm
+    spacing: Style.spacing.md
 
-    Rectangle {
-      Layout.preferredWidth: Style.space(22)
-      Layout.preferredHeight: Style.space(22)
-      radius: Style.space(6)
-      color: root.shownColor
-      border.width: 1
-      border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.35)
+    O.ColorWell {
+      swatch: root.shownColor
+      foreground: root.foreground
+      onClicked: root.pickerExpanded = !root.pickerExpanded
     }
 
     Text {
+      Layout.fillWidth: true
       textFormat: Text.PlainText
-      text: root.hoveredLabel !== "" ? root.hoveredLabel : root.valueLabel()
-      color: root.hoveredLabel !== "" || root.currentValue !== "" ? root.foreground : root.dimForeground
+      text: root.valueLabel()
+      color: root.currentValue !== "" ? root.foreground : root.dimForeground
       font.family: Style.font.family
       font.pixelSize: Style.font.caption
       font.bold: true
       elide: Text.ElideRight
-      Layout.fillWidth: true
     }
 
-    Button {
+    O.Button {
       text: root.resetLabel
+      fontSize: Style.font.caption
       selected: root.currentValue === ""
       bordered: true
       onClicked: root.colorPicked("")
     }
 
-    Button {
+    O.Button {
       text: root.pickerExpanded ? root.t("color.hide", "Hide") : root.t("color.custom", "Custom")
       iconText: "󰌁"
+      fontSize: Style.font.caption
       selected: root.pickerExpanded
       bordered: true
       onClicked: root.pickerExpanded = !root.pickerExpanded
@@ -144,98 +158,62 @@ Column {
   }
 
   // The active theme's palette, as live references.
-  Column {
-    width: parent.width
-    spacing: Style.space(4)
+  Text {
+    textFormat: Text.PlainText
+    text: root.t("color.themePalette", "Theme palette · follows theme switches")
+    color: root.dimForeground
+    font.family: Style.font.family
+    font.pixelSize: Style.font.caption
+  }
 
-    Text {
-      textFormat: Text.PlainText
-      text: root.t("color.themePalette", "Theme palette · follows theme switches")
-      color: root.dimForeground
-      font.family: Style.font.family
-      font.pixelSize: Style.font.caption
-    }
+  Repeater {
+    model: root.chunks(root.themeSwatches)
 
-    Flow {
-      width: parent.width
-      spacing: Style.space(5)
-
-      Repeater {
-        model: root.themeSwatches
-        Rectangle {
-          required property var modelData
-          readonly property string hex: String(modelData.hex || "")
-          readonly property string ref: "theme." + String(modelData.key || "")
-          readonly property bool isChosen: root.currentValue === ref
-
-          width: Style.space(20)
-          height: Style.space(20)
-          radius: Style.space(5)
-          color: hex ? Qt.color(hex) : "transparent"
-          border.width: isChosen ? 2 : 1
-          border.color: isChosen ? Commons.Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.32)
-
-          MouseArea {
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onEntered: root.hoveredLabel = modelData.name + " · " + parent.hex.toUpperCase()
-            onExited: root.hoveredLabel = ""
-            onClicked: root.colorPicked(parent.ref)
-          }
-        }
+    O.SwatchStrip {
+      required property var modelData
+      colors: modelData.items.map(function(s) { return s.hex })
+      currentIndex: {
+        for (var i = 0; i < modelData.items.length; i++)
+          if (root.currentValue === "theme." + modelData.items[i].key) return i
+        return -1
       }
+      foreground: root.foreground
+      activeFocusOnTab: false
+      onPicked: function(index) { root.colorPicked("theme." + modelData.items[index].key) }
     }
   }
 
   // Fixed colors, the same under every theme.
-  Column {
-    width: parent.width
-    spacing: Style.space(4)
+  Text {
+    textFormat: Text.PlainText
+    text: root.t("color.creativePalette", "Fixed colors")
+    color: root.dimForeground
+    font.family: Style.font.family
+    font.pixelSize: Style.font.caption
+  }
 
-    Text {
-      textFormat: Text.PlainText
-      text: root.t("color.creativePalette", "Fixed colors")
-      color: root.dimForeground
-      font.family: Style.font.family
-      font.pixelSize: Style.font.caption
-    }
+  Repeater {
+    model: root.chunks(root.curatedSwatches)
 
-    Flow {
-      width: parent.width
-      spacing: Style.space(5)
-
-      Repeater {
-        model: root.curatedSwatches
-        Rectangle {
-          required property string modelData
-          readonly property bool isChosen: root.currentValue === modelData
-
-          width: Style.space(20)
-          height: Style.space(20)
-          radius: Style.space(5)
-          color: modelData
-          border.width: isChosen ? 2 : 1
-          border.color: isChosen ? Commons.Color.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
-
-          MouseArea {
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onEntered: root.hoveredLabel = modelData.toUpperCase()
-            onExited: root.hoveredLabel = ""
-            onClicked: root.colorPicked(modelData)
-          }
-        }
-      }
+    O.SwatchStrip {
+      required property var modelData
+      colors: modelData.items
+      currentIndex: modelData.items.indexOf(root.currentValue)
+      foreground: root.foreground
+      activeFocusOnTab: false
+      onPicked: function(index) { root.colorPicked(modelData.items[index]) }
     }
   }
 
-  // Saturation (x) by value (y) pad, and the hue rainbow.
+  // Saturation (x) by value (y), and the hue strip, in the kit's corners and
+  // knobs.
   Column {
     visible: root.pickerExpanded
     width: parent.width
-    spacing: Style.space(8)
+    spacing: Style.spacing.sm
+
+    readonly property real smallRadius: Math.min(4, Style.cornerRadius)
+    readonly property real knob: Math.max(14, Math.round(Style.spacing.controlHeight * 0.38))
 
     Item {
       id: svPad
@@ -244,7 +222,7 @@ Column {
 
       Rectangle {
         anchors.fill: parent
-        radius: Style.cornerRadius
+        radius: parent.parent.smallRadius
         color: Qt.hsva(root.hue, 1, 1, 1)
         clip: true
 
@@ -268,21 +246,21 @@ Column {
 
       Rectangle {
         anchors.fill: parent
-        radius: Style.cornerRadius
+        radius: parent.parent.smallRadius
         color: "transparent"
         border.width: 1
-        border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
+        border.color: Kit.Color.track
       }
 
       Rectangle {
         x: Math.round(root.sat * svPad.width) - width / 2
         y: Math.round((1 - root.val) * svPad.height) - height / 2
-        width: Style.space(12)
-        height: Style.space(12)
+        width: parent.parent.knob
+        height: width
         radius: width / 2
         color: root.shownColor
-        border.width: 2
-        border.color: "#ffffff"
+        border.width: Math.max(1, Style.space(2))
+        border.color: Kit.Color.popups.background
       }
 
       MouseArea {
@@ -305,7 +283,7 @@ Column {
 
       Rectangle {
         anchors.fill: parent
-        radius: height / 2
+        radius: parent.parent.smallRadius
         gradient: Gradient {
           orientation: Gradient.Horizontal
           GradientStop { position: 0.00; color: "#ff0000" }
@@ -317,18 +295,18 @@ Column {
           GradientStop { position: 1.00; color: "#ff0000" }
         }
         border.width: 1
-        border.color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.25)
+        border.color: Kit.Color.track
       }
 
       Rectangle {
         x: Math.round(root.hue * (hueBar.width - width))
         anchors.verticalCenter: parent.verticalCenter
-        width: Style.space(10)
-        height: Style.space(16)
-        radius: Style.space(4)
+        width: parent.parent.knob
+        height: width
+        radius: width / 2
         color: Qt.hsva(root.hue, 1, 1, 1)
-        border.width: 2
-        border.color: "#ffffff"
+        border.width: Math.max(1, Style.space(2))
+        border.color: Kit.Color.popups.background
       }
 
       MouseArea {

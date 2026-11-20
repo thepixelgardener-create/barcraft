@@ -1,18 +1,21 @@
 import QtQuick
 import QtQuick.Layouts
 import Quickshell
-import qs.Commons
-import qs.Commons as Commons
-import qs.Ui
+import "kit/Theme"
+import "kit/Theme" as Kit
+import "kit/Ui" as O
 
-// Barcraft Studio, in tabs. Skins: pick, preview on hover or under the
-// cursor, give a screen its own skin, manage saved skins. Colors, Geometry,
-// Surface and Behavior: every skin field, grouped, plus the preferences that
-// hold for all skins; save and share below them.
+// Barcraft Studio, drawn with the Omarchy UI kit (kit/, github.com/omacom/
+// omarchy-ui): the shell's own components as a library, so the Studio looks
+// and behaves like Omarchy Control and follows the theme the same way.
+//
+// Tabs: Skins (pick, preview on hover or under the cursor, give a screen its
+// own skin, manage saved skins), then Colors, Geometry, Surface and Behavior,
+// every skin field as a settings row, save and share below them.
 //
 // Keyboard: arrows or hjkl move the cursor, Left/Right adjust the row under
-// it, Return or Space activates, 1-5 pick a tab, R renames and Delete
-// removes a saved skin, Esc closes, Tab moves to the next panel on the bar.
+// it, Return or Space activates, 1-5 pick a tab, R renames and Delete removes
+// a saved skin, Esc closes, Tab moves to the next panel on the bar.
 Column {
   id: root
 
@@ -35,7 +38,6 @@ Column {
   property string screenTarget: ""
   property string statusMessage: ""
   property bool statusError: false
-  property string saveNameText: ""
   property string renamingId: ""
   property string confirmDeleteId: ""
   property string pendingPreview: ""
@@ -45,9 +47,9 @@ Column {
   property Item navCurrent: null
   property point lastPointer: Qt.point(-1, -1)
 
-  readonly property bool textEditing: nameInput.activeFocus || renamingId !== ""
-  readonly property color fg: Commons.Color.popups.text
-  readonly property color dimFg: Qt.darker(fg, 1.45)
+  readonly property bool textEditing: nameField.activeFocus || renamingId !== ""
+  readonly property color fg: Kit.Color.popups.text
+  readonly property color dimFg: Kit.Color.textDim
   readonly property var screenNames: {
     var out = []
     var list = Quickshell.screens
@@ -58,14 +60,14 @@ Column {
   // Skin tiles, four to a row.
   readonly property real cardWidth: Math.floor((width - Style.spacing.sm * 3) / 4)
 
-  spacing: Style.spacing.panelGap
+  spacing: Style.spacing.md
 
   function tr(key, fallback) {
     return strings ? strings.t(key) : (fallback || key)
   }
 
   function num(value, decimals) {
-    return Commons.I18n.formatNumber(value, decimals || 0)
+    return Kit.I18n.formatNumber(value, decimals || 0)
   }
 
   function percent(value) {
@@ -141,7 +143,7 @@ Column {
     activeTab = tab
     pendingPreview = ""
     previewTimer.restart()
-    body.contentY = 0
+    body.flickable.contentY = 0
   }
 
   function stepTab(direction) {
@@ -209,6 +211,12 @@ Column {
     restoreKeys()
   }
 
+  function saveSkin() {
+    if (!engine) return
+    engine.saveUserSkin(nameField.text || engine.committedSkin.name)
+    nameField.text = ""
+  }
+
   function restoreKeys() {
     if (keyTarget) Qt.callLater(function() { if (root.keyTarget) root.keyTarget.forceActiveFocus() })
   }
@@ -256,7 +264,7 @@ Column {
   function setCurrent(item) {
     navCurrent = item
     if (!item) return
-    ensureVisible(item)
+    body.ensureVisible(item)
     hoverPreview(item.navPreviewId, item.navPreviewId !== "")
   }
 
@@ -311,20 +319,6 @@ Column {
     if (navCurrent) navCurrent.textKey(t)
   }
 
-  function isInside(item, ancestor) {
-    for (var p = item; p; p = p.parent) if (p === ancestor) return true
-    return false
-  }
-
-  function ensureVisible(item) {
-    if (!isInside(item, bodyColumn)) return
-    var p = item.mapToItem(bodyColumn, 0, 0)
-    var top = p.y - Style.space(8)
-    var bottom = p.y + item.height + Style.space(8)
-    if (top < body.contentY) body.contentY = Math.max(0, top)
-    else if (bottom > body.contentY + body.height) body.contentY = Math.min(Math.max(0, body.contentHeight - body.height), bottom - body.height)
-  }
-
   // The pointer moving takes the keyboard cursor away.
   HoverHandler {
     onPointChanged: {
@@ -334,9 +328,9 @@ Column {
     }
   }
 
-  // ---- Header ----------------------------------------------------------------
+  // ---- Header and tabs ---------------------------------------------------------
 
-  PanelHero {
+  O.PanelHero {
     id: hero
     width: parent.width
     foreground: root.fg
@@ -360,713 +354,709 @@ Column {
     }
   }
 
-  // The tabs, a row of their own: five don't fit beside the title.
   NavItem {
     id: tabRow
     navKey: "tabs"
     width: parent.width
-    implicitHeight: tabGroup.implicitHeight
+    implicitHeight: tabBar.implicitHeight
     height: implicitHeight
     onAdjust: function(direction) { root.stepTab(direction) }
     onActivate: root.stepTab(1)
 
-    ButtonGroup {
-      id: tabGroup
-      focusable: false
-      foreground: root.fg
-      fontSize: Style.font.bodySmall
-      value: root.activeTab
-      options: [
-        { value: "presets", label: root.tr("tab.presets", "Skins") },
-        { value: "colors", label: root.tr("tab.colors", "Colors") },
-        { value: "geometry", label: root.tr("tab.geometry", "Geometry") },
-        { value: "surface", label: root.tr("tab.surface", "Surface") },
-        { value: "behavior", label: root.tr("tab.behavior", "Behavior") }
+    O.Tabs {
+      id: tabBar
+      width: parent.width
+      model: [
+        root.tr("tab.presets", "Skins"),
+        root.tr("tab.colors", "Colors"),
+        root.tr("tab.geometry", "Geometry"),
+        root.tr("tab.surface", "Surface"),
+        root.tr("tab.behavior", "Behavior")
       ]
-      onChanged: function(v) { root.setTab(v) }
+      currentIndex: Math.max(0, root.tabs.indexOf(root.activeTab))
+      cursorIndex: tabRow.navFocused ? currentIndex : -1
+      activeFocusOnTab: false
+      onActivated: function(index) { root.setTab(root.tabs[index]) }
     }
-  }
-
-  PanelSeparator {
-    id: heroSeparator
-    width: parent.width
-    foreground: root.fg
   }
 
   // ---- Body (scrolls) -------------------------------------------------------
 
-  Flickable {
+  O.ScrollArea {
     id: body
-    readonly property real chrome: hero.height + tabRow.height + root.spacing + heroSeparator.height
+    readonly property real chrome: hero.height + tabRow.height
       + (footer.visible ? footer.implicitHeight + root.spacing : 0)
       + (statusText.visible ? statusText.implicitHeight + root.spacing : 0)
       + (keysHint.visible ? keysHint.implicitHeight + root.spacing : 0)
       + root.spacing * 2
     width: parent.width
-    height: Math.max(Style.space(140), Math.min(bodyColumn.implicitHeight, root.maxHeight - chrome))
-    contentWidth: width
-    contentHeight: bodyColumn.implicitHeight
-    clip: true
-    boundsBehavior: Flickable.StopAtBounds
-    interactive: contentHeight > height
+    maxHeight: Math.max(Style.space(140), root.maxHeight - chrome)
+    spacing: Style.spacing.md
 
+    // ========================================================================
+    // SKINS
+    // ========================================================================
     Column {
-      id: bodyColumn
-      width: body.width
+      width: parent.width
       spacing: Style.spacing.md
+      visible: root.activeTab === "presets" && !!root.engine
 
-      // ======================================================================
-      // SKINS
-      // ======================================================================
-      Column {
+      // Per-screen skins, when there is more than one screen.
+      ChoiceRow {
+        navKey: "screens"
+        visible: root.screenNames.length > 1
+        label: root.tr("label.applyTo", "Apply to")
+        value: root.screenTarget === "" ? "*all*" : root.screenTarget
+        options: {
+          var out = [{ value: "*all*", label: root.tr("screens.all", "All screens") }]
+          for (var i = 0; i < root.screenNames.length; i++) out.push({ value: root.screenNames[i], label: root.screenNames[i] })
+          return out
+        }
+        onPicked: function(v) {
+          root.screenTarget = v === "*all*" ? "" : v
+          root.pendingPreview = ""
+          previewTimer.restart()
+        }
+      }
+
+      RowLayout {
+        width: parent.width
+        visible: root.screenTarget !== ""
+        spacing: Style.spacing.md
+
+        HintText {
+          Layout.fillWidth: true
+          text: root.tr("hint.screenSkin", "")
+        }
+
+        ActionButton {
+          navKey: "useMain"
+          visible: !!root.engine && (root.engine.revision, root.engine.hasMonitorSkin(root.screenTarget))
+          text: root.tr("action.useMain", "Use main skin")
+          onTriggered: if (root.engine) root.engine.selectForScreen(root.screenTarget, "")
+        }
+      }
+
+      // Every skin in one grid: Omarchy's own bar first (the way back, a
+      // click again leaves it), the theme's skin, the presets.
+      Grid {
+        width: parent.width
+        columns: 4
+        columnSpacing: Style.spacing.sm
+        rowSpacing: Style.spacing.sm
+
+        SkinCard {
+          visible: root.screenTarget === ""
+          width: root.cardWidth
+          cardId: "standard"
+          standardTile: true
+          title: root.tr("tile.standard", "Omarchy")
+          subtitle: root.tr("label.standardHint", "")
+        }
+
+        SkinCard {
+          visible: !!root.engine && root.engine.themeSkin !== null
+          width: root.cardWidth
+          cardId: "theme"
+          skinData: root.engine ? root.engine.themeSkin : null
+          title: root.tr("card.theme", "Theme skin")
+          subtitle: root.engine && root.engine.themeSkin ? root.engine.themeSkin.name : ""
+        }
+
+        Repeater {
+          model: root.engine ? root.engine.builtinSkins : []
+
+          SkinCard {
+            required property var modelData
+            width: root.cardWidth
+            cardId: modelData.id
+            skinData: modelData
+            title: modelData.name
+            subtitle: root.skinDescription(modelData)
+          }
+        }
+      }
+
+      // Saved skins (~/.config/omarchy/bar/skins/*.toml)
+      RowLayout {
         width: parent.width
         spacing: Style.spacing.md
-        visible: root.activeTab === "presets" && !!root.engine
 
-        // Per-screen skins, when there is more than one screen.
-        ChoiceRow {
-          navKey: "screens"
-          visible: root.screenNames.length > 1
-          label: root.tr("label.applyTo", "Apply to")
-          value: root.screenTarget === "" ? "*all*" : root.screenTarget
-          options: {
-            var out = [{ value: "*all*", label: root.tr("screens.all", "All screens") }]
-            for (var i = 0; i < root.screenNames.length; i++) out.push({ value: root.screenNames[i], label: root.screenNames[i] })
-            return out
-          }
-          onPicked: function(v) {
-            root.screenTarget = v === "*all*" ? "" : v
-            root.pendingPreview = ""
-            previewTimer.restart()
-          }
+        O.PanelSectionHeader {
+          Layout.fillWidth: true
+          foreground: root.fg
+          text: root.tr("section.user", "Your skins")
         }
 
-        RowLayout {
-          width: parent.width
-          visible: root.screenTarget !== ""
-          spacing: Style.spacing.md
-
-          HintText {
-            Layout.fillWidth: true
-            text: root.tr("hint.screenSkin", "")
-          }
-
-          ActionButton {
-            navKey: "useMain"
-            visible: !!root.engine && (root.engine.revision, root.engine.hasMonitorSkin(root.screenTarget))
-            text: root.tr("action.useMain", "Use main skin")
-            onTriggered: if (root.engine) root.engine.selectForScreen(root.screenTarget, "")
-          }
+        ActionButton {
+          navKey: "pasteSkins"
+          text: root.tr("action.paste", "Paste skin")
+          iconText: "󰆒"
+          onTriggered: if (root.engine) root.engine.importFromClipboard()
         }
+      }
 
-        // Every skin in one grid: Omarchy's own bar first (the way back,
-        // a click again leaves it), the theme's skin, the presets.
-        Grid {
-          width: parent.width
-          columns: 4
-          columnSpacing: Style.spacing.sm
-          rowSpacing: Style.spacing.sm
+      Grid {
+        width: parent.width
+        columns: 4
+        columnSpacing: Style.spacing.sm
+        rowSpacing: Style.spacing.sm
+        visible: !!root.engine && root.engine.userSkins.length > 0
+
+        Repeater {
+          model: root.engine ? root.engine.userSkins : []
 
           SkinCard {
-            visible: root.screenTarget === ""
+            required property var modelData
             width: root.cardWidth
-            cardId: "standard"
-            standardTile: true
-            title: root.tr("tile.standard", "Omarchy")
-            subtitle: root.tr("label.standardHint", "")
-          }
-
-          SkinCard {
-            visible: !!root.engine && root.engine.themeSkin !== null
-            width: root.cardWidth
-            cardId: "theme"
-            skinData: root.engine ? root.engine.themeSkin : null
-            title: root.tr("card.theme", "Theme skin")
-            subtitle: root.engine && root.engine.themeSkin ? root.engine.themeSkin.name : ""
-          }
-
-          Repeater {
-            model: root.engine ? root.engine.builtinSkins : []
-
-            SkinCard {
-              required property var modelData
-              width: root.cardWidth
-              cardId: modelData.id
-              skinData: modelData
-              title: modelData.name
-              subtitle: root.skinDescription(modelData)
-            }
+            cardId: modelData.id
+            skinData: modelData
+            title: modelData.name
+            subtitle: root.skinDescription(modelData)
+            userSkin: true
           }
         }
+      }
 
-        // Saved skins (~/.config/omarchy/bar/skins/*.toml)
-        RowLayout {
-          width: parent.width
-          spacing: Style.spacing.md
+      // Only when the theme ships a [bar-skin] to follow.
+      ToggleRow {
+        navKey: "followTheme"
+        visible: root.screenTarget === "" && !!root.engine && root.engine.themeSkin !== null
+        label: root.tr("label.followTheme", "Follow theme skin")
+        hint: root.tr("label.followThemeHint", "")
+        checked: root.engine ? root.engine.followTheme : true
+        onToggled: if (root.engine) root.engine.setFollowTheme(!root.engine.followTheme)
+      }
+    }
 
-          PanelSectionHeader {
-            Layout.fillWidth: true
-            foreground: root.fg
-            text: root.tr("section.user", "Your skins")
-          }
+    // ========================================================================
+    // COLORS: fill, what to paint, the picker, tone
+    // ========================================================================
+    Column {
+      width: parent.width
+      spacing: Style.spacing.xxs
+      visible: root.activeTab === "colors" && !!root.engine
 
-          ActionButton {
-            navKey: "pasteSkins"
-            text: root.tr("action.paste", "Paste skin")
-            iconText: "󰆒"
-            onTriggered: if (root.engine) root.engine.importFromClipboard()
-          }
+      StandardHint {}
+
+      ChoiceRow {
+        navKey: "fill"
+        label: root.tr("label.fill", "Fill")
+        value: root.engine ? root.engine.fill : "solid"
+        options: [
+          { value: "solid", label: root.tr("fill.solid", "Solid") },
+          { value: "gradient", label: root.tr("fill.gradient", "Gradient") }
+        ]
+        onPicked: function(v) {
+          root.engine.updateField("fill", v)
+          if (v === "gradient") root.colorTarget = "gradient"
+          else if (root.colorTarget === "gradient") root.colorTarget = "surface"
+        }
+      }
+
+      ChoiceRow {
+        navKey: "colorTarget"
+        label: root.tr("label.colorTarget", "Paint")
+        value: root.colorTarget
+        options: {
+          var out = [
+            { value: "surface", label: root.tr("colorTarget.surface", "Surface") },
+            { value: "foreground", label: root.tr("colorTarget.foreground", "Icons") },
+            { value: "accent", label: root.tr("colorTarget.accent", "Accent") }
+          ]
+          if (root.engine && root.engine.fill === "gradient") out.push({ value: "gradient", label: root.tr("colorTarget.gradient", "Blend") })
+          return out
+        }
+        onPicked: function(v) { root.colorTarget = v }
+      }
+
+      NavItem {
+        id: colorNav
+        navKey: "color"
+        width: parent.width
+        implicitHeight: picker.implicitHeight + Style.spacing.md * 2
+        height: implicitHeight
+        onAdjust: function(direction) { picker.stepSwatch(direction) }
+        onActivate: picker.pickerExpanded = !picker.pickerExpanded
+
+        readonly property string field: root.colorTarget === "foreground" ? "customForeground"
+          : (root.colorTarget === "accent" ? "customAccent"
+            : (root.colorTarget === "gradient" ? "gradientTo" : "customBackground"))
+        readonly property string value: !root.engine ? "" : (root.colorTarget === "foreground" ? root.engine.customForeground
+          : (root.colorTarget === "accent" ? root.engine.customAccent
+            : (root.colorTarget === "gradient" ? root.engine.gradientTo : root.engine.customBackground)))
+
+        Rectangle {
+          anchors.fill: parent
+          radius: Style.cornerRadius
+          color: colorNav.navFocused ? Style.hoverFillFor(root.fg, Kit.Color.accent) : "transparent"
         }
 
-        Grid {
-          width: parent.width
-          columns: 4
-          columnSpacing: Style.spacing.sm
-          rowSpacing: Style.spacing.sm
-          visible: !!root.engine && root.engine.userSkins.length > 0
-
-          Repeater {
-            model: root.engine ? root.engine.userSkins : []
-
-            SkinCard {
-              required property var modelData
-              width: root.cardWidth
-              cardId: modelData.id
-              skinData: modelData
-              title: modelData.name
-              subtitle: root.skinDescription(modelData)
-              userSkin: true
-            }
+        ColorPickerField {
+          id: picker
+          x: Style.spacing.rowPaddingX
+          y: Style.spacing.md
+          width: parent.width - Style.spacing.rowPaddingX * 2
+          strings: root.strings
+          foreground: root.fg
+          dimForeground: root.dimFg
+          themePalette: root.engine ? root.engine.themePalette : []
+          resetLabel: root.colorTarget === "foreground" || root.colorTarget === "gradient"
+            ? root.tr("color.auto", "Auto") : root.tr("color.theme", "Theme")
+          currentValue: colorNav.value
+          resolvedColor: {
+            if (!root.engine || colorNav.value === "") return fallbackColor
+            root.engine.themeColors
+            var hex = root.engine.resolveColorRef(colorNav.value)
+            return hex !== "" ? Qt.color(hex) : fallbackColor
           }
+          fallbackColor: {
+            if (!root.engine) return Kit.Color.background
+            if (root.colorTarget === "foreground") return root.engine.effectiveForeground
+            if (root.colorTarget === "accent" || root.colorTarget === "gradient") return root.engine.resolvedAccent
+            return root.engine.surfaceColor
+          }
+          onColorPicked: function(value) { root.engine.updateField(colorNav.field, value) }
+        }
+      }
+
+      Section {
+        title: root.tr("section.tone", "Tone")
+
+        SliderRow {
+          navKey: "surfaceTone"
+          label: root.tr("label.surfaceTone", "Surface depth")
+          valueText: root.percent(root.engine ? root.engine.surfaceTone : 1)
+          minimum: 0.5
+          maximum: 1.5
+          step: 0.05
+          integer: false
+          value: root.engine ? root.engine.surfaceTone : 1
+          onChangedValue: function(v) { root.engine.updateField("surfaceTone", v) }
         }
 
-        // Only when the theme ships a [bar-skin] to follow.
+        SliderRow {
+          navKey: "contrast"
+          label: root.tr("label.contrast", "Text contrast")
+          valueText: root.percent(root.engine ? root.engine.contrast : 1)
+          minimum: 0.5
+          maximum: 1.5
+          step: 0.05
+          integer: false
+          value: root.engine ? root.engine.contrast : 1
+          onChangedValue: function(v) { root.engine.updateField("contrast", v) }
+        }
+      }
+    }
+
+    // ========================================================================
+    // GEOMETRY: architecture, size, gaps, width, corners, icons
+    // ========================================================================
+    Column {
+      width: parent.width
+      spacing: Style.spacing.xxs
+      visible: root.activeTab === "geometry" && !!root.engine
+
+      StandardHint {}
+
+      ChoiceRow {
+        navKey: "mode"
+        label: root.tr("section.mode", "Architecture")
+        value: root.engine ? root.engine.mode : "floating"
+        options: [
+          { value: "edge", label: root.tr("mode.edge", "Edge") },
+          { value: "floating", label: root.tr("mode.floating", "Floating") },
+          { value: "islands", label: root.tr("mode.islands", "Islands") }
+        ]
+        onPicked: function(v) { root.engine.updateField("mode", v) }
+      }
+
+      SliderRow {
+        navKey: "height"
+        label: root.tr("label.height", "Height")
+        autoAvailable: true
+        isAuto: !!root.engine && root.engine.look.heightAuto
+        valueText: isAuto ? root.num(root.engine.look.barSizePx) + " px"
+          : root.num(root.engine ? root.engine.skinHeight : 30) + " px"
+        minimum: 22
+        maximum: 48
+        step: 1
+        value: root.engine ? root.engine.skinHeight : 30
+        onChangedValue: function(v) { root.engine.updateField("height", Math.round(v)) }
+        onAutoToggled: root.engine.updateField("height", isAuto ? root.engine.skinHeight : "auto")
+      }
+
+      SliderRow {
+        navKey: "edgeMargin"
+        visible: !!root.engine && root.engine.mode !== "edge"
+        label: root.tr("label.edgeMargin", "Edge gap")
+        autoAvailable: true
+        isAuto: !!root.engine && root.engine.look.edgeAuto
+        valueText: isAuto ? root.num(root.engine.look.edgePx) + " px"
+          : root.num(root.engine ? root.engine.edgeMargin : 6) + " px"
+        minimum: 0
+        maximum: 20
+        step: 1
+        value: root.engine ? root.engine.edgeMargin : 6
+        onChangedValue: function(v) { root.engine.updateField("edgeMargin", Math.round(v)) }
+        onAutoToggled: root.engine.updateField("edgeMargin", isAuto ? root.engine.edgeMargin : "auto")
+      }
+
+      SliderRow {
+        navKey: "sideMargin"
+        visible: !!root.engine && root.engine.mode !== "edge"
+        label: root.tr("label.sideMargin", "Side margin")
+        autoAvailable: true
+        isAuto: !!root.engine && root.engine.look.sideAuto
+        valueText: isAuto ? root.num(root.engine.look.sidePx) + " px"
+          : root.num(root.engine ? root.engine.sideMargin : 10) + " px"
+        minimum: 0
+        maximum: 36
+        step: 1
+        value: root.engine ? root.engine.sideMargin : 10
+        onChangedValue: function(v) { root.engine.updateField("sideMargin", Math.round(v)) }
+        onAutoToggled: root.engine.updateField("sideMargin", isAuto ? root.engine.sideMargin : "auto")
+      }
+
+      SliderRow {
+        navKey: "width"
+        visible: !!root.engine && root.engine.mode !== "edge"
+        label: root.tr("label.width", "Width")
+        valueText: root.num(root.engine ? root.engine.look.widthPercent : 100) + "%"
+        minimum: 30
+        maximum: 100
+        step: 5
+        value: root.engine ? root.engine.look.widthPercent : 100
+        onChangedValue: function(v) { root.engine.updateField("width", Math.round(v)) }
+      }
+
+      SliderRow {
+        navKey: "radius"
+        visible: !!root.engine && root.engine.mode !== "edge"
+        label: root.tr("label.radius", "Corners")
+        autoAvailable: true
+        isAuto: !!root.engine && root.engine.look.radiusAuto
+        valueText: isAuto ? root.num(root.engine.look.radiusPx) + " px"
+          : root.num(root.engine ? root.engine.radius : 10) + " px"
+        minimum: 0
+        maximum: 24
+        step: 1
+        value: root.engine ? root.engine.radius : 10
+        onChangedValue: function(v) { root.engine.updateField("radius", Math.round(v)) }
+        onAutoToggled: root.engine.updateField("radius", isAuto ? root.engine.radius : "auto")
+      }
+
+      SliderRow {
+        navKey: "iconScale"
+        label: root.tr("label.iconScale", "Icon size")
+        valueText: root.percent(root.engine ? root.engine.iconScale : 1)
+        minimum: 0.8
+        maximum: 1.5
+        step: 0.05
+        integer: false
+        value: root.engine ? root.engine.iconScale : 1
+        onChangedValue: function(v) { root.engine.updateField("iconScale", v) }
+      }
+    }
+
+    // ========================================================================
+    // SURFACE: opacity, border, widgets, shadow, blur, bezel, art
+    // ========================================================================
+    Column {
+      width: parent.width
+      spacing: Style.spacing.xxs
+      visible: root.activeTab === "surface" && !!root.engine
+
+      StandardHint {}
+
+      SliderRow {
+        navKey: "opacity"
+        label: root.tr("label.opacity", "Opacity")
+        autoAvailable: true
+        isAuto: !!root.engine && root.engine.look.alphaAuto
+        valueText: root.percent(root.engine ? root.engine.backgroundAlpha : 0.92)
+        minimum: 0
+        maximum: 1.0
+        step: 0.02
+        integer: false
+        value: root.engine ? root.engine.backgroundAlpha : 0.92
+        onChangedValue: function(v) { root.engine.updateField("backgroundAlpha", v) }
+        onAutoToggled: root.engine.updateField("backgroundAlpha", isAuto ? root.engine.backgroundAlpha : "auto")
+      }
+
+      ChoiceRow {
+        navKey: "border"
+        label: root.tr("label.borderRole", "Border")
+        value: root.engine ? root.engine.borderRole : "subtle"
+        options: [
+          { value: "none", label: root.tr("border.none", "None") },
+          { value: "subtle", label: root.tr("border.subtle", "Subtle") },
+          { value: "accent", label: root.tr("border.accent", "Accent") },
+          { value: "hyprland", label: root.tr("border.hyprland", "Hyprland") }
+        ]
+        onPicked: function(v) {
+          root.engine.updateField("border", v)
+          if (v !== "none" && root.engine.borderWidth === 0) root.engine.updateField("borderWidth", 1)
+        }
+      }
+
+      ChoiceRow {
+        navKey: "widgetStyle"
+        label: root.tr("label.widgetStyle", "Widgets")
+        value: root.engine ? root.engine.widgetStyle : "plain"
+        options: [
+          { value: "plain", label: root.tr("widgetStyle.plain", "Plain") },
+          { value: "pills", label: root.tr("widgetStyle.pills", "Pills") },
+          { value: "chips", label: root.tr("widgetStyle.chips", "Chips") }
+        ]
+        onPicked: function(v) { root.engine.updateField("widgetStyle", v) }
+      }
+
+      ToggleRow {
+        navKey: "shadow"
+        label: root.tr("label.shadow", "Shadow")
+        hint: root.tr("label.shadowHint", "")
+        checked: root.engine ? root.engine.shadow : false
+        onToggled: root.engine.updateField("shadow", !root.engine.shadow)
+      }
+
+      SliderRow {
+        navKey: "shadowStrength"
+        visible: !!root.engine && root.engine.shadow
+        label: root.tr("label.shadowStrength", "Shadow depth")
+        valueText: root.percent(root.engine ? root.engine.shadowStrength : 0.5)
+        minimum: 0.1
+        maximum: 1.0
+        step: 0.05
+        integer: false
+        value: root.engine ? root.engine.shadowStrength : 0.5
+        onChangedValue: function(v) { root.engine.updateField("shadowStrength", v) }
+      }
+
+      ToggleRow {
+        navKey: "blur"
+        label: root.tr("label.blur", "Glass blur")
+        hint: root.tr("label.blurHint", "")
+        checked: root.engine ? root.engine.blurActive : false
+        onToggled: root.engine.setBlur(!root.engine.blurActive)
+      }
+
+      ChoiceRow {
+        navKey: "bezel"
+        label: root.tr("section.bezel", "Bezel")
+        value: root.engine ? root.engine.bezel : "none"
+        options: [
+          { value: "none", label: root.tr("bezel.none", "Flat") },
+          { value: "raised", label: root.tr("bezel.raised", "Raised") },
+          { value: "inset", label: root.tr("bezel.inset", "Inset") },
+          { value: "ridge", label: root.tr("bezel.ridge", "Ridge") },
+          { value: "glass", label: root.tr("bezel.glass", "Glass") }
+        ]
+        onPicked: function(v) { root.engine.updateField("bezel", v) }
+      }
+
+      SliderRow {
+        navKey: "bezelStrength"
+        visible: !!root.engine && root.engine.bezel !== "none"
+        label: root.tr("label.bezelStrength", "Bezel depth")
+        valueText: root.percent(root.engine ? root.engine.bezelStrength : 0.75)
+        minimum: 0.2
+        maximum: 1.0
+        step: 0.05
+        integer: false
+        value: root.engine ? root.engine.bezelStrength : 0.75
+        onChangedValue: function(v) { root.engine.updateField("bezelStrength", v) }
+      }
+
+      ChoiceRow {
+        navKey: "art"
+        label: root.tr("section.art", "Craft Art")
+        value: root.engine ? root.engine.art : "none"
+        options: [
+          { value: "none", label: root.tr("art.none", "Clean") },
+          { value: "barber", label: root.tr("art.barber", "Barber") },
+          { value: "runeforge", label: root.tr("art.runeforge", "Runeforge") },
+          { value: "rocket", label: root.tr("art.rocket", "Rocket") }
+        ]
+        onPicked: function(v) { root.engine.updateField("art", v) }
+      }
+
+      ToggleRow {
+        navKey: "themeTint"
+        visible: !!root.engine && root.engine.hasArt
+        label: root.tr("label.themeTint", "Tint art with theme")
+        hint: root.tr("label.themeTintHint", "")
+        checked: root.engine ? root.engine.themeTint : false
+        onToggled: root.engine.updateField("themeTint", !root.engine.themeTint)
+      }
+    }
+
+    // ========================================================================
+    // BEHAVIOR: auto-hide, and how Barcraft joins Omarchy
+    // ========================================================================
+    Column {
+      width: parent.width
+      spacing: Style.spacing.xxs
+      visible: root.activeTab === "behavior" && !!root.engine
+
+      StandardHint {}
+
+      ToggleRow {
+        navKey: "autoHide"
+        label: root.tr("label.autoHide", "Auto-hide")
+        hint: root.tr("label.autoHideHint", "")
+        checked: root.engine ? root.engine.autoHide : false
+        onToggled: root.engine.toggleAutoHide()
+      }
+
+      ChoiceRow {
+        navKey: "autohideWhen"
+        visible: !!root.engine && root.engine.autoHide
+        label: root.tr("label.autohideWhen", "Hide")
+        value: root.engine ? root.engine.prefs.autohideWhen : "always"
+        options: [
+          { value: "always", label: root.tr("autohideWhen.always", "Always") },
+          { value: "windows", label: root.tr("autohideWhen.windows", "Only with windows") }
+        ]
+        onPicked: function(v) { root.engine.setPref("autohideWhen", v) }
+      }
+
+      SliderRow {
+        navKey: "autohideDelay"
+        visible: !!root.engine && root.engine.autoHide
+        label: root.tr("label.autohideDelay", "Hide after")
+        valueText: root.num(root.engine ? root.engine.prefs.autohideDelay : 320) + " ms"
+        minimum: 100
+        maximum: 2000
+        step: 50
+        value: root.engine ? root.engine.prefs.autohideDelay : 320
+        onChangedValue: function(v) { root.engine.setPref("autohideDelay", Math.round(v)) }
+      }
+
+      ToggleRow {
+        navKey: "revealOnWorkspace"
+        visible: !!root.engine && root.engine.autoHide
+        label: root.tr("label.revealOnWorkspace", "Peek on workspace switch")
+        hint: root.tr("label.revealOnWorkspaceHint", "")
+        checked: root.engine ? root.engine.prefs.revealOnWorkspace : false
+        onToggled: root.engine.setPref("revealOnWorkspace", !root.engine.prefs.revealOnWorkspace)
+      }
+
+      Section {
+        title: root.tr("section.omarchy", "Omarchy")
+
         ToggleRow {
-          navKey: "followTheme"
-          visible: root.screenTarget === "" && !!root.engine && root.engine.themeSkin !== null
-          label: root.tr("label.followTheme", "Follow theme skin")
-          hint: root.tr("label.followThemeHint", "")
-          checked: root.engine ? root.engine.followTheme : true
-          onToggled: if (root.engine) root.engine.setFollowTheme(!root.engine.followTheme)
-        }
-      }
-
-      // ======================================================================
-      // CRAFT TABS
-      // ======================================================================
-      // COLORS: fill, what to paint, the picker
-      Column {
-        width: parent.width
-        spacing: Style.spacing.md
-        visible: root.activeTab === "colors" && !!root.engine
-
-        StandardHint {}
-
-        Section {
-          // The tab already says it.
-          title: ""
-
-          ChoiceRow {
-            navKey: "fill"
-            label: root.tr("label.fill", "Fill")
-            value: root.engine ? root.engine.fill : "solid"
-            options: [
-              { value: "solid", label: root.tr("fill.solid", "Solid") },
-              { value: "gradient", label: root.tr("fill.gradient", "Gradient") }
-            ]
-            onPicked: function(v) {
-              root.engine.updateField("fill", v)
-              if (v === "gradient") root.colorTarget = "gradient"
-              else if (root.colorTarget === "gradient") root.colorTarget = "surface"
-            }
-          }
-
-          ChoiceRow {
-            navKey: "colorTarget"
-            label: root.tr("label.colorTarget", "Paint")
-            value: root.colorTarget
-            options: {
-              var out = [
-                { value: "surface", label: root.tr("colorTarget.surface", "Surface") },
-                { value: "foreground", label: root.tr("colorTarget.foreground", "Icons") },
-                { value: "accent", label: root.tr("colorTarget.accent", "Accent") }
-              ]
-              if (root.engine && root.engine.fill === "gradient") out.push({ value: "gradient", label: root.tr("colorTarget.gradient", "Blend") })
-              return out
-            }
-            onPicked: function(v) { root.colorTarget = v }
-          }
-
-          NavItem {
-            id: colorNav
-            navKey: "color"
-            width: parent.width
-            implicitHeight: picker.implicitHeight
-            height: implicitHeight
-            onAdjust: function(direction) { picker.stepSwatch(direction) }
-            onActivate: picker.pickerExpanded = !picker.pickerExpanded
-
-            readonly property string field: root.colorTarget === "foreground" ? "customForeground"
-              : (root.colorTarget === "accent" ? "customAccent"
-                : (root.colorTarget === "gradient" ? "gradientTo" : "customBackground"))
-            readonly property string value: !root.engine ? "" : (root.colorTarget === "foreground" ? root.engine.customForeground
-              : (root.colorTarget === "accent" ? root.engine.customAccent
-                : (root.colorTarget === "gradient" ? root.engine.gradientTo : root.engine.customBackground)))
-
-            ColorPickerField {
-              id: picker
-              width: parent.width
-              strings: root.strings
-              foreground: root.fg
-              dimForeground: root.dimFg
-              themePalette: root.engine ? root.engine.themePalette : []
-              resetLabel: root.colorTarget === "foreground" || root.colorTarget === "gradient"
-                ? root.tr("color.auto", "Auto") : root.tr("color.theme", "Theme")
-              currentValue: colorNav.value
-              resolvedColor: {
-                if (!root.engine || colorNav.value === "") return fallbackColor
-                root.engine.themeColors
-                var hex = root.engine.resolveColorRef(colorNav.value)
-                return hex !== "" ? Qt.color(hex) : fallbackColor
-              }
-              fallbackColor: {
-                if (!root.engine) return Commons.Color.bar.background
-                if (root.colorTarget === "foreground") return root.engine.effectiveForeground
-                if (root.colorTarget === "accent" || root.colorTarget === "gradient") return root.engine.resolvedAccent
-                return Commons.Color.bar.background
-              }
-              onColorPicked: function(value) { root.engine.updateField(colorNav.field, value) }
-            }
-          }
+          navKey: "omarchyMenu"
+          label: root.tr("label.omarchyMenu", "Show in Omarchy menu")
+          hint: root.tr("label.omarchyMenuHint", "")
+          checked: root.engine ? root.engine.prefs.omarchyMenu : false
+          onToggled: root.engine.setPref("omarchyMenu", !root.engine.prefs.omarchyMenu)
         }
 
-        Section {
-          title: root.tr("section.tone", "Tone")
-
-          SliderRow {
-            navKey: "surfaceTone"
-            label: root.tr("label.surfaceTone", "Surface depth")
-            valueText: root.percent(root.engine ? root.engine.surfaceTone : 1)
-            minimum: 0.5
-            maximum: 1.5
-            step: 0.05
-            integer: false
-            value: root.engine ? root.engine.surfaceTone : 1
-            onChangedValue: function(v) { root.engine.updateField("surfaceTone", v) }
-          }
-
-          SliderRow {
-            navKey: "contrast"
-            label: root.tr("label.contrast", "Text contrast")
-            valueText: root.percent(root.engine ? root.engine.contrast : 1)
-            minimum: 0.5
-            maximum: 1.5
-            step: 0.05
-            integer: false
-            value: root.engine ? root.engine.contrast : 1
-            onChangedValue: function(v) { root.engine.updateField("contrast", v) }
-          }
-        }
-      }
-
-      // GEOMETRY: architecture, size, gaps, width, corners, icons
-      Column {
-        width: parent.width
-        spacing: Style.spacing.md
-        visible: root.activeTab === "geometry" && !!root.engine
-
-        StandardHint {}
-
-        Section {
-          title: root.tr("section.mode", "Architecture")
-
-          ChoiceRow {
-            navKey: "mode"
-            value: root.engine ? root.engine.mode : "floating"
-            options: [
-              { value: "edge", label: root.tr("mode.edge", "Edge") },
-              { value: "floating", label: root.tr("mode.floating", "Floating") },
-              { value: "islands", label: root.tr("mode.islands", "Islands") }
-            ]
-            onPicked: function(v) { root.engine.updateField("mode", v) }
-          }
-        }
-
-        Section {
-          title: root.tr("section.geometry", "Geometry")
-
-          SliderRow {
-            navKey: "height"
-            label: root.tr("label.height", "Height")
-            autoAvailable: true
-            isAuto: !!root.engine && root.engine.look.heightAuto
-            valueText: isAuto ? root.tr("value.auto").arg(root.num(root.engine.look.barSizePx) + " px")
-              : root.num(root.engine ? root.engine.skinHeight : 30) + " px"
-            minimum: 22
-            maximum: 48
-            step: 1
-            value: root.engine ? root.engine.skinHeight : 30
-            onChangedValue: function(v) { root.engine.updateField("height", Math.round(v)) }
-            onAutoToggled: root.engine.updateField("height", isAuto ? root.engine.skinHeight : "auto")
-          }
-
-          SliderRow {
-            navKey: "edgeMargin"
-            visible: !!root.engine && root.engine.mode !== "edge"
-            label: root.tr("label.edgeMargin", "Edge gap")
-            autoAvailable: true
-            isAuto: !!root.engine && root.engine.look.edgeAuto
-            valueText: isAuto ? root.tr("value.auto").arg(root.num(root.engine.look.edgePx) + " px")
-              : root.num(root.engine ? root.engine.edgeMargin : 6) + " px"
-            minimum: 0
-            maximum: 20
-            step: 1
-            value: root.engine ? root.engine.edgeMargin : 6
-            onChangedValue: function(v) { root.engine.updateField("edgeMargin", Math.round(v)) }
-            onAutoToggled: root.engine.updateField("edgeMargin", isAuto ? root.engine.edgeMargin : "auto")
-          }
-
-          SliderRow {
-            navKey: "sideMargin"
-            visible: !!root.engine && root.engine.mode !== "edge"
-            label: root.tr("label.sideMargin", "Side margin")
-            autoAvailable: true
-            isAuto: !!root.engine && root.engine.look.sideAuto
-            valueText: isAuto ? root.tr("value.auto").arg(root.num(root.engine.look.sidePx) + " px")
-              : root.num(root.engine ? root.engine.sideMargin : 10) + " px"
-            minimum: 0
-            maximum: 36
-            step: 1
-            value: root.engine ? root.engine.sideMargin : 10
-            onChangedValue: function(v) { root.engine.updateField("sideMargin", Math.round(v)) }
-            onAutoToggled: root.engine.updateField("sideMargin", isAuto ? root.engine.sideMargin : "auto")
-          }
-
-          SliderRow {
-            navKey: "width"
-            visible: !!root.engine && root.engine.mode !== "edge"
-            label: root.tr("label.width", "Width")
-            valueText: root.num(root.engine ? root.engine.look.widthPercent : 100) + "%"
-            minimum: 30
-            maximum: 100
-            step: 5
-            value: root.engine ? root.engine.look.widthPercent : 100
-            onChangedValue: function(v) { root.engine.updateField("width", Math.round(v)) }
-          }
-
-          SliderRow {
-            navKey: "radius"
-            visible: !!root.engine && root.engine.mode !== "edge"
-            label: root.tr("label.radius", "Corners")
-            autoAvailable: true
-            isAuto: !!root.engine && root.engine.look.radiusAuto
-            valueText: isAuto ? root.tr("value.auto").arg(root.num(root.engine.look.radiusPx) + " px")
-              : root.num(root.engine ? root.engine.radius : 10) + " px"
-            minimum: 0
-            maximum: 24
-            step: 1
-            value: root.engine ? root.engine.radius : 10
-            onChangedValue: function(v) { root.engine.updateField("radius", Math.round(v)) }
-            onAutoToggled: root.engine.updateField("radius", isAuto ? root.engine.radius : "auto")
-          }
-
-          SliderRow {
-            navKey: "iconScale"
-            label: root.tr("label.iconScale", "Icon size")
-            valueText: root.percent(root.engine ? root.engine.iconScale : 1)
-            minimum: 0.8
-            maximum: 1.5
-            step: 0.05
-            integer: false
-            value: root.engine ? root.engine.iconScale : 1
-            onChangedValue: function(v) { root.engine.updateField("iconScale", v) }
-          }
-        }
-      }
-
-      // SURFACE: opacity, depth, contrast, border, widgets, shadow, blur, bezel, art
-      Column {
-        width: parent.width
-        spacing: Style.spacing.md
-        visible: root.activeTab === "surface" && !!root.engine
-
-        StandardHint {}
-
-        Section {
-          title: ""
-
-          SliderRow {
-            navKey: "opacity"
-            label: root.tr("label.opacity", "Opacity")
-            autoAvailable: true
-            isAuto: !!root.engine && root.engine.look.alphaAuto
-            valueText: isAuto ? root.tr("value.auto").arg(root.percent(root.engine.backgroundAlpha))
-              : root.percent(root.engine ? root.engine.backgroundAlpha : 0.92)
-            minimum: 0
-            maximum: 1.0
-            step: 0.02
-            integer: false
-            value: root.engine ? root.engine.backgroundAlpha : 0.92
-            onChangedValue: function(v) { root.engine.updateField("backgroundAlpha", v) }
-            onAutoToggled: root.engine.updateField("backgroundAlpha", isAuto ? root.engine.backgroundAlpha : "auto")
-          }
-
-          ChoiceRow {
-            navKey: "border"
-            label: root.tr("label.borderRole", "Border")
-            value: root.engine ? root.engine.borderRole : "subtle"
-            options: [
-              { value: "none", label: root.tr("border.none", "None") },
-              { value: "subtle", label: root.tr("border.subtle", "Subtle") },
-              { value: "accent", label: root.tr("border.accent", "Accent") },
-              { value: "hyprland", label: root.tr("border.hyprland", "Hyprland") }
-            ]
-            onPicked: function(v) {
-              root.engine.updateField("border", v)
-              if (v !== "none" && root.engine.borderWidth === 0) root.engine.updateField("borderWidth", 1)
-            }
-          }
-
-          ChoiceRow {
-            navKey: "widgetStyle"
-            label: root.tr("label.widgetStyle", "Widgets")
-            value: root.engine ? root.engine.widgetStyle : "plain"
-            options: [
-              { value: "plain", label: root.tr("widgetStyle.plain", "Plain") },
-              { value: "pills", label: root.tr("widgetStyle.pills", "Pills") },
-              { value: "chips", label: root.tr("widgetStyle.chips", "Chips") }
-            ]
-            onPicked: function(v) { root.engine.updateField("widgetStyle", v) }
-          }
-
-          ToggleRow {
-            navKey: "shadow"
-            label: root.tr("label.shadow", "Shadow")
-            hint: root.tr("label.shadowHint", "")
-            checked: root.engine ? root.engine.shadow : false
-            onToggled: root.engine.updateField("shadow", !root.engine.shadow)
-          }
-
-          SliderRow {
-            navKey: "shadowStrength"
-            visible: !!root.engine && root.engine.shadow
-            label: root.tr("label.shadowStrength", "Shadow depth")
-            valueText: root.percent(root.engine ? root.engine.shadowStrength : 0.5)
-            minimum: 0.1
-            maximum: 1.0
-            step: 0.05
-            integer: false
-            value: root.engine ? root.engine.shadowStrength : 0.5
-            onChangedValue: function(v) { root.engine.updateField("shadowStrength", v) }
-          }
-
-          ToggleRow {
-            navKey: "blur"
-            label: root.tr("label.blur", "Glass blur")
-            hint: root.tr("label.blurHint", "")
-            checked: root.engine ? root.engine.blurActive : false
-            onToggled: root.engine.setBlur(!root.engine.blurActive)
-          }
-        }
-
-        Section {
-          title: root.tr("section.bezel", "Bezel")
-
-          ChoiceRow {
-            navKey: "bezel"
-            value: root.engine ? root.engine.bezel : "none"
-            options: [
-              { value: "none", label: root.tr("bezel.none", "Flat") },
-              { value: "raised", label: root.tr("bezel.raised", "Raised") },
-              { value: "inset", label: root.tr("bezel.inset", "Inset") },
-              { value: "ridge", label: root.tr("bezel.ridge", "Ridge") },
-              { value: "glass", label: root.tr("bezel.glass", "Glass") }
-            ]
-            onPicked: function(v) { root.engine.updateField("bezel", v) }
-          }
-
-          SliderRow {
-            navKey: "bezelStrength"
-            visible: !!root.engine && root.engine.bezel !== "none"
-            label: root.tr("label.bezelStrength", "Bezel depth")
-            valueText: root.percent(root.engine ? root.engine.bezelStrength : 0.75)
-            minimum: 0.2
-            maximum: 1.0
-            step: 0.05
-            integer: false
-            value: root.engine ? root.engine.bezelStrength : 0.75
-            onChangedValue: function(v) { root.engine.updateField("bezelStrength", v) }
-          }
-        }
-
-        Section {
-          title: root.tr("section.art", "Craft Art")
-
-          ChoiceRow {
-            navKey: "art"
-            value: root.engine ? root.engine.art : "none"
-            options: [
-              { value: "none", label: root.tr("art.none", "Clean") },
-              { value: "barber", label: root.tr("art.barber", "Barber") },
-              { value: "runeforge", label: root.tr("art.runeforge", "Runeforge") },
-              { value: "rocket", label: root.tr("art.rocket", "Rocket") }
-            ]
-            onPicked: function(v) { root.engine.updateField("art", v) }
-          }
-
-          ToggleRow {
-            navKey: "themeTint"
-            visible: !!root.engine && root.engine.hasArt
-            label: root.tr("label.themeTint", "Tint art with theme")
-            hint: root.tr("label.themeTintHint", "")
-            checked: root.engine ? root.engine.themeTint : false
-            onToggled: root.engine.updateField("themeTint", !root.engine.themeTint)
-          }
-        }
-      }
-
-      // BEHAVIOR: auto-hide, and how Barcraft joins Omarchy
-      Column {
-        width: parent.width
-        spacing: Style.spacing.md
-        visible: root.activeTab === "behavior" && !!root.engine
-
-        StandardHint {}
-
-        Section {
-          title: ""
-
-          ToggleRow {
-            navKey: "autoHide"
-            label: root.tr("label.autoHide", "Auto-hide")
-            hint: root.tr("label.autoHideHint", "")
-            checked: root.engine ? root.engine.autoHide : false
-            onToggled: root.engine.toggleAutoHide()
-          }
-
-          HintText {
-            width: parent.width
-            text: root.tr("hint.behavior", "")
-          }
-
-          ChoiceRow {
-            navKey: "autohideWhen"
-            visible: !!root.engine && root.engine.autoHide
-            label: root.tr("label.autohideWhen", "Hide")
-            value: root.engine ? root.engine.prefs.autohideWhen : "always"
-            options: [
-              { value: "always", label: root.tr("autohideWhen.always", "Always") },
-              { value: "windows", label: root.tr("autohideWhen.windows", "Only with windows") }
-            ]
-            onPicked: function(v) { root.engine.setPref("autohideWhen", v) }
-          }
-
-          SliderRow {
-            navKey: "autohideDelay"
-            visible: !!root.engine && root.engine.autoHide
-            label: root.tr("label.autohideDelay", "Hide after")
-            valueText: root.num(root.engine ? root.engine.prefs.autohideDelay : 320) + " ms"
-            minimum: 100
-            maximum: 2000
-            step: 50
-            value: root.engine ? root.engine.prefs.autohideDelay : 320
-            onChangedValue: function(v) { root.engine.setPref("autohideDelay", Math.round(v)) }
-          }
-
-          ToggleRow {
-            navKey: "revealOnWorkspace"
-            visible: !!root.engine && root.engine.autoHide
-            label: root.tr("label.revealOnWorkspace", "Peek on workspace switch")
-            hint: root.tr("label.revealOnWorkspaceHint", "")
-            checked: root.engine ? root.engine.prefs.revealOnWorkspace : false
-            onToggled: root.engine.setPref("revealOnWorkspace", !root.engine.prefs.revealOnWorkspace)
-          }
-        }
-
-        Section {
-          title: root.tr("section.omarchy", "Omarchy")
-
-          ToggleRow {
-            navKey: "omarchyMenu"
-            label: root.tr("label.omarchyMenu", "Show in Omarchy menu")
-            hint: root.tr("label.omarchyMenuHint", "")
-            checked: root.engine ? root.engine.prefs.omarchyMenu : false
-            onToggled: root.engine.setPref("omarchyMenu", !root.engine.prefs.omarchyMenu)
-          }
-
-          ToggleRow {
-            navKey: "updateCheck"
-            label: root.tr("label.updateCheck", "Check after Omarchy updates")
-            hint: root.tr("label.updateCheckHint", "")
-            checked: root.engine ? root.engine.prefs.updateCheck : false
-            onToggled: root.engine.setPref("updateCheck", !root.engine.prefs.updateCheck)
-          }
+        ToggleRow {
+          navKey: "updateCheck"
+          label: root.tr("label.updateCheck", "Check after Omarchy updates")
+          hint: root.tr("label.updateCheckHint", "")
+          checked: root.engine ? root.engine.prefs.updateCheck : false
+          onToggled: root.engine.setPref("updateCheck", !root.engine.prefs.updateCheck)
         }
       }
     }
   }
 
-  // ---- Footer: stays put while the Craft body scrolls -------------------------
+  // ---- Footer: stays put under the editing tabs -------------------------------
 
   Column {
     id: footer
     width: parent.width
-    spacing: Style.spacing.md
+    spacing: Style.spacing.sm
     visible: root.craftTab && !!root.engine
 
-    PanelSeparator {
+    O.PanelSeparator {
       width: parent.width
       foreground: root.fg
     }
 
     RowLayout {
       width: parent.width
-      spacing: Style.spacing.md
+      spacing: Style.spacing.sm
 
       NavItem {
+        id: nameNav
         navKey: "skinName"
         Layout.fillWidth: true
-        implicitHeight: nameInput.implicitHeight
+        implicitHeight: Style.spacing.controlHeight
         Layout.preferredHeight: implicitHeight
-        onActivate: nameInput.forceActiveFocus()
-        onTextKey: function(t) { nameInput.forceActiveFocus(); nameInput.insert(nameInput.length, t) }
+        onActivate: nameField.forceActiveFocus()
+        onTextKey: function(t) {
+          nameField.forceActiveFocus()
+          nameField.insert(nameField.length, t)
+        }
 
-        TextField {
-          id: nameInput
+        // The kit's field chrome around a LineField (see LineField.qml).
+        O.BorderSurface {
           anchors.fill: parent
-          placeholderText: root.tr("placeholder.skinName", "Save as skin name…")
-          text: root.saveNameText
-          maximumLength: 40
-          onTextChanged: root.saveNameText = text
-          onAccepted: {
-            saveButton.save()
-            root.restoreKeys()
+          radius: Style.cornerRadius
+          color: Style.normalFillFor(root.fg, Kit.Color.accent)
+          borderSpec: Border.controlSpec(nameField.activeFocus ? "focus" : (nameNav.navFocused || nameHover.hovered ? "hover-cursor" : "normal"), root.fg, Kit.Color.accent)
+
+          HoverHandler {
+            id: nameHover
+            cursorShape: Qt.IBeamCursor
           }
-          Keys.onEscapePressed: function(event) {
-            event.accepted = true
-            root.restoreKeys()
+
+          Item {
+            anchors.fill: parent
+            anchors.leftMargin: Style.spacing.controlPaddingX
+            anchors.rightMargin: Style.spacing.controlPaddingX
+            clip: true
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              visible: nameField.text === ""
+              textFormat: Text.PlainText
+              text: root.tr("placeholder.skinName", "Save as skin name…")
+              color: Kit.Color.textFaint
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+            }
+
+            LineField {
+              id: nameField
+              anchors.verticalCenter: parent.verticalCenter
+              color: root.fg
+              selectionColor: Style.selectionFillFor(root.fg, Kit.Color.accent)
+              font.family: Style.font.family
+              font.pixelSize: Style.font.body
+              maximumLength: 40
+              takesPaste: true
+              onPasteRequested: if (root.engine) root.engine.pasteInto(nameField)
+              onKeyPressed: function(event) {
+                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                  event.accepted = true
+                  root.saveSkin()
+                  root.restoreKeys()
+                } else if (event.key === Qt.Key_Escape) {
+                  event.accepted = true
+                  root.restoreKeys()
+                }
+              }
+            }
           }
         }
       }
 
       ActionButton {
-        id: saveButton
         navKey: "save"
         text: root.tr("action.save", "Save")
-        selected: root.saveNameText.trim().length > 0
-        onTriggered: save()
-
-        function save() {
-          if (!root.engine) return
-          root.engine.saveUserSkin(root.saveNameText || root.engine.committedSkin.name)
-          root.saveNameText = ""
-        }
+        selected: nameField.text.trim().length > 0
+        onTriggered: root.saveSkin()
       }
     }
 
     RowLayout {
       width: parent.width
-      spacing: Style.spacing.md
+      spacing: Style.spacing.sm
 
       ActionButton {
         navKey: "copy"
@@ -1098,33 +1088,63 @@ Column {
     visible: root.statusMessage !== ""
     textFormat: Text.PlainText
     text: root.statusMessage
-    color: root.statusError ? Commons.Color.urgent : Commons.Color.accent
+    color: root.statusError ? Kit.Color.urgent : Kit.Color.accent
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
     width: parent.width
   }
 
-  HintText {
+  // The keys, as key caps, while the keyboard drives.
+  Flow {
     id: keysHint
     width: parent.width
     visible: root.keyboardMode && root.statusMessage === ""
-    text: root.tr("hint.keys", "")
-    horizontalAlignment: Text.AlignHCenter
+    spacing: Style.spacing.md
+
+    Repeater {
+      model: [
+        { keys: "Up+Down", label: root.tr("keys.move", "move") },
+        { keys: "Left+Right", label: root.tr("keys.adjust", "adjust") },
+        { keys: "Enter", label: root.tr("keys.pick", "pick") },
+        { keys: "1-5", label: root.tr("keys.tabs", "tabs") },
+        { keys: "R", label: root.tr("keys.rename", "rename") },
+        { keys: "Delete", label: root.tr("keys.delete", "delete") }
+      ]
+
+      Row {
+        required property var modelData
+        spacing: Style.spacing.xxs
+
+        O.KeyCombo {
+          anchors.verticalCenter: parent.verticalCenter
+          keys: modelData.keys
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
+          text: modelData.label
+          color: root.dimFg
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+        }
+      }
+    }
   }
 
   // ===========================================================================
-  // Building blocks
+  // Building blocks, from the kit
   // ===========================================================================
 
-  // Anything the keyboard cursor can stop on. Rows react to the signals; the
-  // cursor draws its ring around whichever one it is on.
+  // Anything the keyboard cursor can stop on. Rows react to the signals and
+  // draw the cursor the kit's way (hasCursor).
   component NavItem: Item {
     id: navItem
 
     property string navKey: ""
     property bool navEnabled: true
-    // Left/Right move between items (cards) rather than adjust this one.
+    // Left/Right move between items (tiles) rather than adjust this one.
     property bool navGrid: false
     // A skin id to preview on the bar while the cursor rests here.
     property string navPreviewId: ""
@@ -1137,49 +1157,34 @@ Column {
 
     Component.onCompleted: root.registerNav(navItem)
     Component.onDestruction: root.unregisterNav(navItem)
-
-    Rectangle {
-      // Rows as wide as the scrolling body keep the ring inside it, where
-      // the body's clip would cut its sides off.
-      readonly property real side: navItem.width >= bodyColumn.width - 1 ? 0 : -Style.space(3)
-      z: 100
-      visible: navItem.navFocused
-      anchors.fill: parent
-      anchors.topMargin: -Style.space(3)
-      anchors.bottomMargin: -Style.space(3)
-      anchors.leftMargin: side
-      anchors.rightMargin: side
-      radius: Style.cornerRadius + Style.space(3)
-      color: "transparent"
-      border.width: Math.max(1, Style.space(2))
-      border.color: Commons.Color.accent
-    }
-  }
-
-  // A group inside a tab: a small header, then its rows close together.
-  component Section: Column {
-    property string title: ""
-    property bool separated: false
-    width: parent.width
-    spacing: Style.spacing.sm
-
-    PanelSectionHeader {
-      visible: parent.title !== ""
-      foreground: root.fg
-      text: parent.title
-    }
   }
 
   // Shown on the editing tabs while Omarchy standard is on.
   component StandardHint: Text {
     width: parent ? parent.width : 0
     visible: !!root.engine && root.engine.standard
+    bottomPadding: Style.spacing.sm
     textFormat: Text.PlainText
-    color: Commons.Color.accent
+    color: Kit.Color.accent
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
     text: root.tr("hint.standardCraft", "")
+  }
+
+  // A group inside a tab: the kit's section header, then its rows.
+  component Section: Column {
+    property string title: ""
+    width: parent.width
+    spacing: Style.spacing.xxs
+    topPadding: Style.spacing.md
+
+    O.PanelSectionHeader {
+      visible: parent.title !== ""
+      x: Style.spacing.rowPaddingX
+      foreground: root.fg
+      text: parent.title
+    }
   }
 
   component HintText: Text {
@@ -1190,7 +1195,7 @@ Column {
     wrapMode: Text.WordWrap
   }
 
-  // One line: the label, then the choices.
+  // A settings row with a pick-one control (kit SettingRow + ButtonGroup).
   component ChoiceRow: NavItem {
     id: choice
     property string label: ""
@@ -1199,7 +1204,7 @@ Column {
     signal picked(string value)
 
     width: parent ? parent.width : 0
-    implicitHeight: choiceLine.implicitHeight
+    implicitHeight: choiceRow.implicitHeight
     height: implicitHeight
 
     function indexOfValue() {
@@ -1218,35 +1223,26 @@ Column {
       picked(options[(indexOfValue() + 1) % options.length].value)
     }
 
-    RowLayout {
-      id: choiceLine
+    O.SettingRow {
+      id: choiceRow
       width: parent.width
-      spacing: Style.spacing.md
+      label: choice.label
+      hasCursor: choice.navFocused
+      foreground: root.fg
 
-      Text {
-        visible: choice.label !== ""
-        Layout.fillWidth: true
-        Layout.minimumWidth: Style.space(40)
-        textFormat: Text.PlainText
-        text: choice.label
-        color: root.fg
-        font.family: Style.font.family
-        font.pixelSize: Style.font.bodySmall
-        elide: Text.ElideRight
-      }
-
-      ButtonGroup {
+      O.ButtonGroup {
         focusable: false
         foreground: root.fg
         fontSize: Style.font.bodySmall
         value: choice.value
         options: choice.options
+        cursorIndex: choice.navFocused ? choice.indexOfValue() : -1
         onChanged: function(v) { choice.picked(v) }
       }
     }
   }
 
-  // One line: label, slider, Auto, value.
+  // A settings row with a slider: Auto (follow Omarchy), the slider, the value.
   component SliderRow: NavItem {
     id: sRow
     property string label: ""
@@ -1256,14 +1252,13 @@ Column {
     property real step: 1
     property bool integer: true
     property real value: 0
-    // "Auto" follows Omarchy (theme tokens, Hyprland gaps and rounding).
     property bool autoAvailable: false
     property bool isAuto: false
     signal changedValue(real v)
     signal autoToggled()
 
     width: parent ? parent.width : 0
-    implicitHeight: sliderLine.implicitHeight
+    implicitHeight: sliderRow.implicitHeight
     height: implicitHeight
     onActivate: if (autoAvailable) autoToggled()
 
@@ -1274,77 +1269,55 @@ Column {
       if (Math.abs(next - value) > 0.0001) changedValue(next)
     }
 
-    RowLayout {
-      id: sliderLine
+    O.SettingRow {
+      id: sliderRow
       width: parent.width
-      spacing: Style.spacing.sm
+      label: sRow.label
+      hasCursor: sRow.navFocused
+      foreground: root.fg
 
-      Text {
-        Layout.preferredWidth: Math.round(sRow.width * 0.3)
-        textFormat: Text.PlainText
-        text: sRow.label
-        color: root.fg
-        font.family: Style.font.family
-        font.pixelSize: Style.font.bodySmall
-        elide: Text.ElideRight
-      }
+      Row {
+        spacing: Style.spacing.sm
 
-      PanelSlider {
-        Layout.fillWidth: true
-        bar: root.bar
-        minimum: sRow.minimum
-        maximum: sRow.maximum
-        step: sRow.step
-        integer: sRow.integer
-        value: sRow.value
-        onMoved: function(v) { sRow.changedValue(v) }
-        onReleased: function(v) { sRow.changedValue(v) }
-      }
-
-      Rectangle {
-        visible: sRow.autoAvailable
-        Layout.preferredWidth: autoLabel.implicitWidth + Style.space(12)
-        Layout.preferredHeight: autoLabel.implicitHeight + Style.space(4)
-        radius: Math.min(height / 2, Style.cornerRadius)
-        color: sRow.isAuto ? Style.selectedFillFor(root.fg, Commons.Color.accent) : "transparent"
-        border.width: 1
-        border.color: sRow.isAuto ? Commons.Color.accent : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, autoMouse.containsMouse ? 0.5 : 0.25)
-
-        Text {
-          id: autoLabel
-          anchors.centerIn: parent
-          textFormat: Text.PlainText
+        O.Button {
+          visible: sRow.autoAvailable
+          anchors.verticalCenter: parent.verticalCenter
           text: root.tr("label.auto", "Auto")
-          color: sRow.isAuto ? Commons.Color.accent : root.dimFg
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          font.bold: sRow.isAuto
-        }
-
-        MouseArea {
-          id: autoMouse
-          anchors.fill: parent
-          hoverEnabled: true
-          cursorShape: Qt.PointingHandCursor
+          fontSize: Style.font.caption
+          bordered: true
+          selected: sRow.isAuto
+          tooltipText: root.tr("hint.auto", "")
           onClicked: sRow.autoToggled()
         }
-      }
 
-      Text {
-        Layout.preferredWidth: Style.space(sRow.autoAvailable ? 44 : 40)
-        horizontalAlignment: Text.AlignRight
-        textFormat: Text.PlainText
-        // With Auto on, the chip says so; the value is what Omarchy gives.
-        text: sRow.isAuto ? sRow.valueText.replace(/^.*·\s*/, "") : sRow.valueText
-        color: sRow.isAuto ? Commons.Color.accent : root.dimFg
-        font.family: Style.font.family
-        font.pixelSize: Style.font.caption
-        font.bold: true
-        elide: Text.ElideLeft
+        O.ValueSlider {
+          anchors.verticalCenter: parent.verticalCenter
+          width: Style.space(120)
+          minimum: sRow.minimum
+          maximum: sRow.maximum
+          step: sRow.step
+          integer: sRow.integer
+          value: sRow.value
+          onMoved: function(v) { sRow.changedValue(v) }
+          onReleased: function(v) { sRow.changedValue(v) }
+        }
+
+        Text {
+          anchors.verticalCenter: parent.verticalCenter
+          width: Style.space(42)
+          horizontalAlignment: Text.AlignRight
+          textFormat: Text.PlainText
+          text: sRow.valueText
+          color: sRow.isAuto ? Kit.Color.accent : root.dimFg
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          font.bold: true
+        }
       }
     }
   }
 
+  // A settings row with a switch; its explanation is a tooltip.
   component ToggleRow: NavItem {
     id: tRow
     property string label: ""
@@ -1353,48 +1326,32 @@ Column {
     signal toggled()
 
     width: parent ? parent.width : 0
-    implicitHeight: toggleLayout.implicitHeight
+    implicitHeight: toggleRow.implicitHeight
     height: implicitHeight
     onAdjust: function(direction) { if ((direction > 0) !== checked) toggled() }
     onActivate: toggled()
 
-    RowLayout {
-      id: toggleLayout
+    HoverHandler { id: toggleHover }
+
+    O.SettingRow {
+      id: toggleRow
       width: parent.width
-      spacing: Style.spacing.md
+      label: tRow.label
+      hasCursor: tRow.navFocused
+      foreground: root.fg
 
-      Column {
-        Layout.fillWidth: true
-        spacing: Style.space(1)
-
-        Text {
-          width: parent.width
-          textFormat: Text.PlainText
-          text: tRow.label
-          color: root.fg
-          font.family: Style.font.family
-          font.pixelSize: Style.font.bodySmall
-          font.bold: true
-          elide: Text.ElideRight
-        }
-
-        Text {
-          width: parent.width
-          visible: tRow.hint !== ""
-          textFormat: Text.PlainText
-          text: tRow.hint
-          color: root.dimFg
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-        }
-      }
-
-      ToggleSwitch {
+      O.ToggleSwitch {
         checked: tRow.checked
+        hasCursor: tRow.navFocused
         foreground: root.fg
         onToggled: tRow.toggled()
       }
+    }
+
+    O.PanelToolTip {
+      visible: toggleHover.hovered && tRow.hint !== ""
+      delay: 500
+      text: tRow.hint
     }
   }
 
@@ -1413,19 +1370,20 @@ Column {
     height: implicitHeight
     onActivate: triggered()
 
-    Button {
+    O.Button {
       id: actionButton
       anchors.fill: parent
       text: action.text
       iconText: action.iconText
       selected: action.selected
+      hasCursor: action.navFocused
       bordered: true
       onClicked: action.triggered()
     }
   }
 
-  // A skin as a compact tile: its thumbnail and name. The description is a
-  // tooltip; hovering already previews the skin on the bar itself.
+  // A skin as a compact tile on the kit's cursor surface: its thumbnail and
+  // name, the description a tooltip; hovering previews it on the bar.
   component SkinCard: NavItem {
     id: card
     property var skinData: null
@@ -1455,15 +1413,12 @@ Column {
       onHoveredChanged: root.hoverPreview(card.cardId, hovered)
     }
 
-    BorderSurface {
+    O.CursorSurface {
       anchors.fill: parent
-      radius: Style.cornerRadius
-      color: card.chosen
-        ? Style.selectedFillFor(root.fg, Commons.Color.accent)
-        : (card.hot ? Style.hoverFillFor(root.fg, Commons.Color.accent) : Style.normalFillFor(root.fg, Commons.Color.accent))
-      borderSpec: Border.controlSpec(card.chosen ? "selected" : (card.hot ? "hover-cursor" : "normal"), root.fg, Commons.Color.accent)
-
-      Behavior on color { ColorAnimation { duration: Style.duration(120) } }
+      hasCursor: card.hot
+      current: card.chosen
+      bordered: true
+      foreground: root.fg
     }
 
     MouseArea {
@@ -1498,32 +1453,48 @@ Column {
           Layout.fillWidth: true
           textFormat: Text.PlainText
           text: card.title
-          color: card.chosen ? Commons.Color.accent : root.fg
+          color: card.chosen ? Kit.Color.accent : root.fg
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
           font.bold: true
           elide: Text.ElideRight
         }
 
-        Loader {
-          active: card.renaming
-          visible: active
+        Item {
+          visible: card.renaming
           Layout.fillWidth: true
-          sourceComponent: Component {
-            TextField {
-              text: card.title
-              maximumLength: 40
-              verticalPadding: Style.space(1)
-              font.pixelSize: Style.font.caption
-              Component.onCompleted: {
-                forceActiveFocus()
-                selectAll()
-              }
-              onAccepted: root.finishRename(card.cardId, text, true)
-              onActiveFocusChanged: if (!activeFocus) root.finishRename(card.cardId, text, false)
-              Keys.onEscapePressed: function(event) {
-                event.accepted = true
-                root.finishRename(card.cardId, text, false)
+          Layout.preferredHeight: renameLoader.item ? renameLoader.item.implicitHeight : 0
+          clip: true
+
+          Loader {
+            id: renameLoader
+            active: card.renaming
+            width: parent.width
+            sourceComponent: Component {
+              LineField {
+                id: renameField
+                text: card.title
+                maximumLength: 40
+                takesPaste: true
+                color: root.fg
+                selectionColor: Style.selectionFillFor(root.fg, Kit.Color.accent)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.caption
+                Component.onCompleted: {
+                  forceActiveFocus()
+                  selectAll()
+                }
+                onPasteRequested: if (root.engine) root.engine.pasteInto(renameField)
+                onActiveFocusChanged: if (!activeFocus) root.finishRename(card.cardId, text, false)
+                onKeyPressed: function(event) {
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    event.accepted = true
+                    root.finishRename(card.cardId, text, true)
+                  } else if (event.key === Qt.Key_Escape) {
+                    event.accepted = true
+                    root.finishRename(card.cardId, text, false)
+                  }
+                }
               }
             }
           }
@@ -1546,7 +1517,7 @@ Column {
       }
     }
 
-    PanelToolTip {
+    O.PanelToolTip {
       visible: cardHover.hovered && card.subtitle !== "" && !card.renaming
       delay: 500
       text: card.subtitle
@@ -1562,7 +1533,7 @@ Column {
 
     textFormat: Text.PlainText
     text: glyph
-    color: danger ? Commons.Color.urgent : (iconMouse.containsMouse ? Commons.Color.accent : root.dimFg)
+    color: danger ? Kit.Color.urgent : (iconMouse.containsMouse ? Kit.Color.accent : root.dimFg)
     font.family: Style.font.family
     font.pixelSize: Style.font.body
 
@@ -1575,7 +1546,7 @@ Column {
       onClicked: icon.triggered()
     }
 
-    PanelToolTip {
+    O.PanelToolTip {
       visible: iconMouse.containsMouse && icon.tip !== ""
       text: icon.tip
     }

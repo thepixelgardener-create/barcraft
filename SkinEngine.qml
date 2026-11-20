@@ -953,6 +953,33 @@ Item {
     }
   }
 
+  // A paste into a Studio field (LineField asks rather than reading the
+  // clipboard itself): one line of text, read capped like every paste here.
+  property var _pasteField: null
+
+  function pasteInto(field) {
+    if (!field || fieldPasteProc.running) return
+    _pasteField = field
+    fieldPasteProc.running = true
+  }
+
+  Process {
+    id: fieldPasteProc
+    command: ["sh", "-c", "wl-paste --no-newline --type text 2>/dev/null | head -c 256"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var field = engine._pasteField
+        engine._pasteField = null
+        if (!field || !field.activeFocus) return
+        var clean = String(text || "").replace(/[\r\n\t\u2028\u2029]+/g, " ")
+        var room = Math.max(0, field.pasteLimit - field.length)
+        if (clean.length > room) clean = clean.slice(0, room)
+        if (clean) field.insert(field.cursorPosition, clean)
+      }
+    }
+  }
+
   // Clipboard text, cut off just past the 32 KiB a skin may be.
   Process {
     id: pasteProc

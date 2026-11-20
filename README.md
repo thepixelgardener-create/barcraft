@@ -29,6 +29,7 @@ Barcraft (`thepixelgardener.barcraft`) is Omarchy's own bar with a skin engine o
 | Omarchy menu extensions | Optional Appearance → Menu Bar → Barcraft, with a ✓ by the skin you wear |
 | OSD (`omarchy osd`) | Skin changes by keybinding, right-click or IPC show their name |
 | `~/.config/omarchy/hooks/post-update.d/` | Optional check after Omarchy updates: a notification when Omarchy's bar moved under Barcraft |
+| The Omarchy UI kit ([omacom/omarchy-ui](https://github.com/omacom/omarchy-ui)), the shell's own QML kit as a library | The Studio is drawn with it (`kit/`), so it looks and behaves like Omarchy Control: Tabs, SettingRow, ButtonGroup, ValueSlider, ToggleSwitch, SwatchStrip, ColorWell, CursorSurface, Keycaps |
 | Keyboard panels, `Style.duration`, `Translations`, `PlainText` | The Studio uses them; English and German ship |
 
 ## Install
@@ -142,6 +143,8 @@ scripts/sync-upstream.sh --check     # has Omarchy's bar changed since the last 
 scripts/sync-upstream.sh             # three-way merge Omarchy's bar into Bar.qml / BarModel.js
 ```
 
+The Studio is drawn with the Omarchy UI kit, vendored into `kit/` at a pinned revision (`kit/KIT_REV`, the same one thepixelgardener.omarchyform uses). `KitTheme.qml` feeds the kit the theme the shell draws with, through the QML stand-in `kit/Theme/ThemeSource.qml`, since a shell plugin can load none of the kit's C++. To take a newer kit: `node tools/vendor-kit.js /path/to/omarchy-ui` (`--check` says what would change). Text is typed through `LineField.qml`, never a TextInput: Qt 6.12.0's TextInput reads the whole clipboard on every clipboard change, which inside the shell could stall it.
+
 `Bar.qml` and `BarModel.js` are Omarchy's bar plugin with Barcraft's changes on top. `upstream/*.orig` records the Omarchy version they were last synced with (`upstream/VERSION`). After an Omarchy update, run the sync script, look at the bar, and commit. If it reports conflicts, resolve them and run `scripts/sync-upstream.sh --mark-synced`.
 
 The widget finds the bar's engine by walking up to the bar strip it sits in (`barcraftEngine`). Don't replace that with a shared `.pragma library`: Omarchy loads `Bar.qml` and the widget under different URLs, so each would get its own copy.
@@ -154,3 +157,4 @@ The widget finds the bar's engine by walking up to the bar strip it sits in (`ba
 | `Bar.qml` | Omarchy's bar with skinned surfaces, auto-hide, widget pills, IPC |
 | `BarWidget.qml`, `StudioContent.qml` | The widget and the Studio keyboard panel |
 | `BarcraftMark.qml`, `SkinThumbnail.qml`, `ColorPickerField.qml`, `BarArtLayer.qml`, `BarBezelOverlay.qml` | Building blocks |
+| `kit/`, `KitTheme.qml`, `LineField.qml`, `tools/vendor-kit.js` | The Omarchy UI kit, its theme bridge, the safe text field, and the vendoring script |
