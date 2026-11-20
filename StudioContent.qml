@@ -331,12 +331,10 @@ Column {
       return root.tr("meta.preset").arg(name)
     }
     iconComponent: Component {
-      Text {
-        textFormat: Text.PlainText
-        text: "󰇈"
-        color: Commons.Color.accent
-        font.family: Style.font.family
-        font.pixelSize: Style.font.display
+      BarcraftMark {
+        width: Math.round(Style.font.display * 1.5)
+        height: Math.round(width * 0.56)
+        ink: root.fg
       }
     }
     trailingControl: Component {

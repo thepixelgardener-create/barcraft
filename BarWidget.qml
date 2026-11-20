@@ -83,7 +83,12 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: "󰇈"
+    // The mark is drawn, not a glyph: a slot the size of an icon glyph's.
+    text: ""
+    labelVisible: false
+    hasVisualContent: true
+    fixedWidth: root.vertical ? -1 : Style.bar.iconSlot
+    fixedHeight: root.vertical ? Style.bar.iconSlot : -1
     tooltipText: {
       var eng = root.skinEngine
       var name = eng && eng.committedSkin ? eng.committedSkin.name : ""
@@ -95,6 +100,13 @@ BarWidget {
       } else {
         root.toggle()
       }
+    }
+
+    BarcraftMark {
+      anchors.centerIn: parent
+      ink: button.foreground
+      lit: root.panelOpen
+      scale: button.pressScale
     }
   }
 

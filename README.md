@@ -9,7 +9,7 @@ Barcraft (`thepixelgardener.barcraft`) is Omarchy's own bar with a skin engine o
 ## Highlights
 
 - **8 built-in skins.** Classic: `Floating`, `Islands`, `Frosted`, `Capsule`, `Editorial`. Wild Craft (illustrated art): `Barber Pole`, `Runeforge`, `Long Rocket`.
-- **Barcraft Studio.** Click the `󰇈` widget. Hover a skin (or move the keyboard cursor onto it) to preview it on the bar, click to keep it. Craft every field live, save skins, rename and delete them, copy a skin as TOML or paste one someone shared.
+- **Barcraft Studio.** Click the Barcraft pill in the bar. Hover a skin (or move the keyboard cursor onto it) to preview it on the bar, click to keep it. Craft every field live, save skins, rename and delete them, copy a skin as TOML or paste one someone shared.
 - **Keyboard first.** The Studio is a keyboard panel: arrows or `hjkl` move, `←`/`→` adjust, `Return`/`Space` activate, `1`/`2` switch tabs, `R` renames and `Del` deletes a saved skin, `Esc` closes, `Tab` moves to the next panel.
 - **Per-monitor skins.** "Apply to" gives one screen its own skin. Height and icon color stay shared, since every widget draws with the one size and foreground the bar publishes.
 - **Theme-native colors.** Theme swatches store live references (`theme.blue`) that follow theme switches; fixed colors store `#rrggbb`. Text and icons flip to a readable ink automatically (WCAG 4.5:1) unless you pick an icon color.

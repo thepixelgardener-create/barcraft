@@ -1,4 +1,40 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="14" fill="#16a34a"/>
-  <text x="32" y="32" dy="0.35em" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="26" font-weight="600" fill="#ffffff">BP</text>
+  <title>Barcraft</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2b3150"/>
+      <stop offset="1" stop-color="#12141c"/>
+    </linearGradient>
+    <!-- Raised bezel: lit from above, falling into shadow below. -->
+    <linearGradient id="rim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e4e9ff"/>
+      <stop offset="0.45" stop-color="#7d8cc4"/>
+      <stop offset="1" stop-color="#1c2135"/>
+    </linearGradient>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a3150"/>
+      <stop offset="1" stop-color="#181c2c"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.32"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="drop" x="-20%" y="-40%" width="140%" height="200%">
+      <feGaussianBlur stdDeviation="2.2"/>
+    </filter>
+  </defs>
+
+  <rect width="64" height="64" rx="14" fill="url(#tile)"/>
+
+  <!-- Shadow, bezel ring, face -->
+  <rect x="7" y="25" width="50" height="20" rx="10" fill="#000000" opacity="0.55" filter="url(#drop)"/>
+  <rect x="6" y="21" width="52" height="22" rx="11" fill="url(#rim)"/>
+  <rect x="8.5" y="23.5" width="47" height="17" rx="8.5" fill="url(#face)"/>
+  <rect x="10" y="24.5" width="44" height="6.5" rx="3.25" fill="url(#gloss)"/>
+
+  <!-- Widgets: accent, label, status -->
+  <circle cx="17" cy="32" r="3" fill="#7aa2f7"/>
+  <rect x="25" y="30.5" width="14" height="3" rx="1.5" fill="#c0caf5" opacity="0.85"/>
+  <circle cx="45" cy="32" r="2" fill="#c0caf5" opacity="0.7"/>
+  <circle cx="51" cy="32" r="2" fill="#c0caf5" opacity="0.7"/>
 </svg>
