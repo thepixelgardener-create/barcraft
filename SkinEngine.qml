@@ -4,12 +4,11 @@ import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import "SkinParser.js" as SkinParser
-import "BarcraftBridge.js" as Bridge
 
 // Barcraft's state: the chosen skin, saved skins, preferences, per-monitor
 // skins and the live preview. The bar owns the primary engine; the Studio
-// widget borrows it through BarcraftBridge, so an edit shows on the bar at
-// once without polling a file.
+// widget finds it by walking up to the bar strip it sits in, so an edit shows
+// on the bar at once.
 Item {
   id: engine
 
@@ -19,11 +18,24 @@ Item {
 
   readonly property string homeDir: Quickshell.env("HOME")
   readonly property string configDir: homeDir + "/.config/omarchy"
-  readonly property string stateFilePath: configDir + "/barcraft.toml"
-  readonly property string userSkinsDir: configDir + "/bar-skins"
+  // Barcraft 0.2's own state file, read once to move it into shell.json.
+  readonly property string legacyStatePath: configDir + "/barcraft.toml"
+  // Saved skins sit with the rest of the bar's user files, beside Omarchy's
+  // ~/.config/omarchy/bar/modules and bar/scripts. The 0.2 folder still loads.
+  readonly property string userSkinsDir: configDir + "/bar/skins"
+  readonly property string legacySkinsDir: configDir + "/bar-skins"
   readonly property string userShellTomlPath: configDir + "/shell.toml"
+  readonly property string menuExtensionPath: configDir + "/extensions/omarchy-menu.jsonc"
+  readonly property string updateHookPath: configDir + "/hooks/post-update.d/barcraft-sync"
+  readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
 
   property bool isPrimary: true
+  // Handed in by the bar: the shell's config facade (writes shell.json),
+  // the `bar:` subtree it last loaded, the plugin manifest, and orientation.
+  property var shellApi: null
+  property var barConfig: null
+  property var manifest: null
+  property bool vertical: false
   // Told by the bar: Omarchy's own background setting (omarchy-bar background).
   property bool barGlassy: false
   property bool barTransparent: false
@@ -87,6 +99,7 @@ Item {
     paletteMap: engine.themeColors
     barGlassy: engine.barGlassy
     standard: engine.standardActive
+    vertical: engine.vertical
   }
   readonly property var look: mainLook
 
@@ -183,13 +196,25 @@ Item {
 
   // What windows make room for, from committed skins only, so hovering a
   // preview never makes every tiled window jump.
+  function barSizePxOf(skin) {
+    var stock = vertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
+    if (!skin || skin.height === "auto") return stock
+    var px = Style.space(Number(skin.height) || 30)
+    return vertical ? Math.max(Style.bar.sizeVertical, px) : px
+  }
+
+  function edgePxOf(skin) {
+    if (!skin || skin.mode === "edge") return 0
+    return skin.edgeMargin === "auto" ? Style.gapsOut : Style.space(Number(skin.edgeMargin) || 0)
+  }
+
   function zoneFor(screenName) {
-    if (standard) return { standard: true, height: 0, edgeMargin: 0, autoHide: false }
+    if (standard) return { standard: true, sizePx: barSizePxOf(null), edgePx: 0, autoHide: false }
     var own = monitorSkinFor(screenName) || committedSkin
     return {
       standard: false,
-      height: committedSkin ? committedSkin.height : 30,
-      edgeMargin: own.mode === "edge" ? 0 : own.edgeMargin,
+      sizePx: barSizePxOf(committedSkin),
+      edgePx: edgePxOf(own),
       autoHide: own.visibility === "autohide"
     }
   }
@@ -291,8 +316,24 @@ Item {
 
   // What the bar wears now, for the widget's tooltip and the IPC.
   function currentName() {
-    if (standardActive) return mainLook.standardSkin.name
+    if (standardActive) return strings.t("label.standard")
     return activeSkin ? activeSkin.name : ""
+  }
+
+  // The id the menu's checkmarks compare against.
+  function currentId() {
+    if (standard) return "standard"
+    if (usingThemeSkin) return "theme"
+    if (hasCustomDraft) return "draft"
+    return activeSkinId
+  }
+
+  // Omarchy's on-screen display, as volume and brightness use it: for a
+  // change made by keybinding, right-click or IPC, where no panel is open.
+  function announce() {
+    if (!isPrimary) return
+    var payload = JSON.stringify({ icon: "󰍜", message: currentName(), duration: "1100" })
+    runCommand(["omarchy-shell", "-q", "osd", "show", payload])
   }
 
   // ---- Editing -------------------------------------------------------------
@@ -351,6 +392,7 @@ Item {
     next[key] = value
     prefs = SkinParser.normalizePrefs(next)
     persistDebounce.restart()
+    if (key === "omarchyMenu" || key === "updateCheck") Qt.callLater(engine.syncIntegration)
   }
 
   function resetToPreset() {
@@ -413,6 +455,7 @@ Item {
     toSave.id = slug
     toSave.name = cleanName
     toSave.source = "user"
+    toSave.path = skinPath(slug)
 
     writeFile(skinPath(slug), SkinParser.serializeToml(toSave), function(ok) {
       engine.notice(ok ? "status.saved" : "status.saveFailed", slug, !ok)
@@ -436,16 +479,18 @@ Item {
     if (!skin || !cleanName || cleanName === skin.name) return id
     clearPreview()
     var slug = slugForName(cleanName, id, true)
+    var oldPath = skin.path || skinPath(id)
     var renamed = SkinParser.normalizeSkin(skin, slug, "user")
     renamed.id = slug
     renamed.name = cleanName
     renamed.source = "user"
-    writeFile(skinPath(slug), SkinParser.serializeToml(renamed), function(ok) {
+    renamed.path = skinPath(slug)
+    writeFile(renamed.path, SkinParser.serializeToml(renamed), function(ok) {
       if (!ok) {
         engine.notice("status.saveFailed", slug, true)
         return
       }
-      if (slug !== id) engine.runCommand(["rm", "-f", "--", engine.skinPath(id)])
+      if (oldPath !== renamed.path) engine.runCommand(["rm", "-f", "--", oldPath])
       engine.notice("status.renamed", cleanName, false)
     })
     replaceUserSkin(id, renamed)
@@ -470,7 +515,7 @@ Item {
     }
     if (!victim) return
     clearPreview()
-    runCommand(["rm", "-f", "--", skinPath(id)])
+    runCommand(["rm", "-f", "--", victim.path || skinPath(id)])
     // The bar doesn't change under you: a deleted skin that's on stays on as
     // an unsaved draft until something else is picked.
     if (activeSkinId === id && !hasCustomDraft && !usingThemeSkin) {
@@ -521,33 +566,104 @@ Item {
     notice("status.imported", skin.name, false)
   }
 
-  // ---- Files ---------------------------------------------------------------
+  // ---- Settings: shell.json `bar.barcraft` ---------------------------------
+  //
+  // Omarchy keeps feature settings in shell.json subtrees (bar:, dock:, idle:)
+  // and the host writes the file; the bar is handed the `bar:` subtree as
+  // barConfig. Barcraft's state is `bar.barcraft` beside position, background
+  // and layout, so it moves with the rest of the Omarchy config, `omarchy bar
+  // reset` resets it too, and jq reads it.
 
-  property string _lastStateText: ""
+  readonly property var configBlock: barConfig && typeof barConfig === "object"
+    && barConfig.barcraft && typeof barConfig.barcraft === "object" ? barConfig.barcraft : null
+  property string _lastConfigJson: ""
+  property bool migrated: false
+
+  onConfigBlockChanged: if (stateLoaded) Qt.callLater(engine.applyConfigBlock)
+
+  function stateJson() {
+    return JSON.stringify(SkinParser.stateToJson(activeSkinId, followTheme, hasCustomDraft ? customSkin : null, prefs, monitorSkins, standard))
+  }
 
   function persistState() {
     persistDebounce.stop()
-    var content = SkinParser.serializeStateToml(activeSkinId, followTheme, hasCustomDraft ? customSkin : null, prefs, monitorSkins, standard)
-    if (content === _lastStateText) return
-    _lastStateText = content
-    stateFileView.setText(content)
+    if (!isPrimary || !shellApi || typeof shellApi.mutateShellConfig !== "function") return
+    var json = stateJson()
+    if (json === _lastConfigJson) return
+    _lastConfigJson = json
+    shellApi.mutateShellConfig(function(config) {
+      if (!config.bar || typeof config.bar !== "object") config.bar = {}
+      config.bar.barcraft = JSON.parse(json)
+    })
   }
 
-  function applyStateText(raw) {
-    var st = SkinParser.parseStateToml(raw)
+  function applyState(st) {
     activeSkinId = st.activeSkinId
     followTheme = st.followTheme
-    standard = st.standard
+    standard = !!st.standard
     prefs = st.prefs
     monitorSkins = st.monitors
-    var draft = SkinParser.parseToml(raw, st.activeSkinId, "custom", function(id) { return engine.findSkinById(id) })
-    if (draft) {
-      customSkin = draft
+    if (st.draft) {
+      customSkin = st.draft
       hasCustomDraft = true
     } else {
       hasCustomDraft = false
     }
     revision++
+  }
+
+  function applyConfigBlock() {
+    var block = configBlock
+    if (!block) return
+    var st = SkinParser.stateFromJson(block, function(id) { return engine.findSkinById(id) })
+    var json = JSON.stringify(SkinParser.stateToJson(st.activeSkinId, st.followTheme, st.draft, st.prefs, st.monitors, st.standard))
+    if (json === _lastConfigJson) return
+    _lastConfigJson = json
+    applyState(st)
+    if (settled) Qt.callLater(engine.syncIntegration)
+  }
+
+  // Barcraft 0.2 kept its state in ~/.config/omarchy/barcraft.toml. Moved
+  // into shell.json once; the old file is kept as barcraft.toml.migrated.
+  function applyLegacyText(raw) {
+    var st = SkinParser.parseStateToml(raw)
+    st.draft = SkinParser.parseToml(raw, st.activeSkinId, "custom", function(id) { return engine.findSkinById(id) })
+    applyState(st)
+  }
+
+  function loadState() {
+    if (stateLoaded) return
+    if (configBlock) {
+      applyConfigBlock()
+    } else if (isPrimary && legacyStateView.loaded) {
+      var raw = legacyStateView.text()
+      if (raw && raw.trim()) {
+        applyLegacyText(raw)
+        persistState()
+        migrated = true
+        runCommand(["mv", "-n", "--", legacyStatePath, legacyStatePath + ".migrated"])
+      }
+    }
+    stateLoaded = true
+    settleTimer.restart()
+  }
+
+  FileView {
+    id: legacyStateView
+    property bool loaded: false
+    path: engine.isPrimary ? engine.legacyStatePath : ""
+    printErrors: false
+    watchChanges: false
+    onLoaded: loaded = true
+  }
+
+  // The host hands barConfig in right after the bar is built; give it and
+  // the legacy file a moment, then settle on whichever holds the state.
+  Timer {
+    id: loadTimer
+    interval: 400
+    repeat: false
+    onTriggered: engine.loadState()
   }
 
   // Each write gets its own FileView: concurrent writes never cancel each
@@ -618,34 +734,8 @@ Item {
     onTriggered: {
       engine.settled = true
       engine.applyIconScale()
+      engine.syncIntegration()
     }
-  }
-
-  FileView {
-    id: stateFileView
-    path: engine.stateFilePath
-    watchChanges: true
-    atomicWrites: true
-    printErrors: false
-    onLoaded: {
-      var raw = text()
-      if (raw !== engine._lastStateText) {
-        engine._lastStateText = raw
-        if (raw && raw.trim()) engine.applyStateText(raw)
-      }
-      if (!engine.stateLoaded) {
-        engine.stateLoaded = true
-        settleTimer.restart()
-      }
-    }
-    onLoadFailed: function(error) {
-      if (error === FileViewError.FileNotFound && engine.isPrimary) engine.persistState()
-      if (!engine.stateLoaded) {
-        engine.stateLoaded = true
-        settleTimer.restart()
-      }
-    }
-    onFileChanged: reload()
   }
 
   FileView {
@@ -665,6 +755,121 @@ Item {
     target: Commons.Color
     function onBackgroundChanged() { themeColorsView.reload() }
     function onAccentChanged() { themeColorsView.reload() }
+  }
+
+  // ---- Omarchy integration: menu entries and the post-update check --------
+
+  Translations {
+    id: strings
+    directory: Qt.resolvedUrl("i18n")
+  }
+
+  // Appearance → Menu Bar → Barcraft in Omarchy's menu, written into the
+  // user's menu extensions between Barcraft's markers. Checkmarks ask the
+  // running bar (`omarchy-shell barcraft current`), so they stay true.
+  function menuEntries() {
+    var parent = "appearance.top-bar.barcraft"
+    var pill = "󰍜"
+    var check = function(id) { return "[[ $(omarchy-shell -q barcraft current) == " + id + " ]]" }
+    var rows = [
+      [parent, { icon: pill, label: "Barcraft", when: "omarchy-shell barcraft ping >/dev/null 2>&1" }],
+      [parent + ".studio", { icon: "󰏘", label: strings.t("menu.studio"), action: "omarchy-shell shell toggle thepixelgardener.barcraft" }],
+      [parent + ".standard", { icon: "󰍜", label: strings.t("label.standard"), checked: check("standard"), action: "omarchy-shell barcraft setSkin standard" }]
+    ]
+    if (themeSkin) rows.push([parent + ".theme", { icon: "󰏘", label: strings.t("card.theme"), checked: check("theme"), action: "omarchy-shell barcraft setSkin theme" }])
+    for (var i = 0; i < builtinSkins.length; i++) {
+      var b = builtinSkins[i]
+      rows.push([parent + "." + b.id, { icon: b.category === "wild" ? "󰏘" : "󰍜", label: b.name, checked: check(b.id), action: "omarchy-shell barcraft setSkin " + b.id }])
+    }
+    return rows
+  }
+
+  function shellQuoteSingle(text) {
+    return "'" + String(text).replace(/'/g, "'\\''") + "'"
+  }
+
+  // After an Omarchy update: has Omarchy's bar moved under Barcraft's copy?
+  // Notify-only; merging stays a deliberate step (scripts/sync-upstream.sh).
+  function updateHookScript() {
+    return [
+      "#!/bin/bash",
+      "# Added by Barcraft (thepixelgardener.barcraft). Turn \"Check after Omarchy",
+      "# updates\" off in Barcraft Studio to remove this file.",
+      "plugin=" + shellQuoteSingle(pluginDir),
+      "[[ -f $plugin/scripts/sync-upstream.sh ]] || exit 0",
+      "if ! bash \"$plugin/scripts/sync-upstream.sh\" --check >/dev/null 2>&1; then",
+      "  omarchy-notification-send -g " + shellQuoteSingle("󰍜") + " Barcraft " + shellQuoteSingle(strings.t("hook.changed")),
+      "fi",
+      ""
+    ].join("\n")
+  }
+
+  property bool _menuWanted: false
+
+  function syncIntegration() {
+    if (!isPrimary || !settled) return
+    _menuWanted = !!prefs.omarchyMenu
+    if (menuView.ready) applyMenu()
+    else menuView.reload()
+    if (prefs.updateCheck) writeFile(updateHookPath, updateHookScript())
+    else runCommand(["rm", "-f", "--", updateHookPath])
+  }
+
+  function applyMenu() {
+    var current = menuView.missing ? "" : menuView.text()
+    if (!_menuWanted && current.indexOf("barcraft:begin") < 0) return
+    var next = SkinParser.applyMenuBlock(current, _menuWanted ? menuEntries() : null)
+    if (next !== current) menuView.setText(next)
+  }
+
+  FileView {
+    id: menuView
+    property bool ready: false
+    property bool missing: false
+    path: engine.isPrimary ? engine.menuExtensionPath : ""
+    atomicWrites: true
+    printErrors: false
+    watchChanges: false
+    onLoaded: {
+      ready = true
+      missing = false
+      if (engine.settled) engine.applyMenu()
+    }
+    onLoadFailed: function(error) {
+      // Never write over a menu file we could not read.
+      ready = error === FileViewError.FileNotFound
+      missing = ready
+      if (ready && engine.settled) engine.applyMenu()
+    }
+  }
+
+  // A plain-text health report: `omarchy-shell barcraft doctor`.
+  function doctor() {
+    var layout = barConfig && barConfig.layout ? barConfig.layout : {}
+    var placed = false
+    for (var section in layout) {
+      var list = layout[section] || []
+      for (var i = 0; i < list.length; i++) {
+        var entry = list[i]
+        var id = entry && typeof entry === "object" ? entry.id : entry
+        if (id === "thepixelgardener.barcraft") placed = true
+      }
+    }
+    var mons = []
+    for (var screen in monitorSkins) mons.push(screen + "=" + monitorSkins[screen])
+    var lines = [
+      "Barcraft " + (manifest && manifest.version ? manifest.version : "?") + " is the active bar",
+      "Studio widget on the bar: " + (placed ? "yes" : "no (omarchy bar put thepixelgardener.barcraft --section right)"),
+      "Settings: shell.json bar.barcraft" + (configBlock ? "" : " (not written yet: still the defaults)") + (migrated ? ", moved from barcraft.toml" : ""),
+      "Wearing: " + currentName() + " (" + currentId() + ")" + (standard ? ", Omarchy standard on" : ""),
+      "Per-monitor skins: " + (mons.length ? mons.join(", ") : "none"),
+      "Blur: skin " + (committedBlur ? "wants it" : "doesn't") + ", Omarchy background is " + (barTransparent ? "clear" : (barGlassy ? "glassy" : "opaque")),
+      "Icon size: " + Math.round(committedIconScale * 100) + "%" + (Math.abs(committedIconScale - 1) > 0.001 ? " via [bar] tokens in ~/.config/omarchy/shell.toml" : ""),
+      "Saved skins: " + userSkins.length + " in " + userSkinsDir,
+      "Omarchy menu entries: " + (prefs.omarchyMenu ? "on" : "off") + ", update check hook: " + (prefs.updateCheck ? "on" : "off"),
+      "Omarchy bar base: scripts/sync-upstream.sh --check tells whether Omarchy's bar moved"
+    ]
+    return lines.join("\n")
   }
 
   // ---- Icon size: Omarchy's [bar] icon tokens in ~/.config/omarchy/shell.toml
@@ -710,30 +915,32 @@ Item {
     userShellView.setText(next)
   }
 
+  // Saved skins from both folders (the current one first, so it wins a name
+  // clash), read with jq like Omarchy's own scripts: no python needed.
   Process {
     id: scanProc
-    command: ["python3", "-c",
-      "import glob, json, os, sys; d = sys.argv[1]; out = [];\n"
-      + "for p in sorted(glob.glob(os.path.join(d, '*.toml')))[:200]:\n"
-      + "  try:\n"
-      + "    if os.path.getsize(p) <= 32768:\n"
-      + "      out.append({'slug': os.path.splitext(os.path.basename(p))[0], 'text': open(p, encoding='utf-8', errors='replace').read()})\n"
-      + "  except OSError:\n"
-      + "    pass\n"
-      + "print(json.dumps(out))",
-      engine.userSkinsDir]
+    command: ["sh", "-c",
+      "for d in \"$@\"; do for f in \"$d\"/*.toml; do "
+      + "[ -f \"$f\" ] && [ \"$(stat -c %s \"$f\")\" -le 32768 ] && jq -Rs --arg path \"$f\" '{path: $path, text: .}' \"$f\"; "
+      + "done; done | jq -s '.[:200]'",
+      "sh", engine.userSkinsDir, engine.legacySkinsDir]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         try {
           var rows = JSON.parse(text || "[]")
           var parsed = []
+          var seen = {}
           for (var i = 0; i < rows.length; i++) {
-            var slug = SkinParser.slugify(rows[i].slug)
+            var file = String(rows[i].path || "")
+            var slug = SkinParser.slugify(file.replace(/^.*\//, "").replace(/\.toml$/, ""))
+            if (seen[slug]) continue
             var skin = SkinParser.parseToml(rows[i].text, slug, "user", function(id) { return engine.findSkinById(id) })
             if (!skin) continue
+            seen[slug] = true
             skin.id = slug
             skin.source = "user"
+            skin.path = file
             skin.category = skin.art !== "none" ? "wild" : "classic"
             parsed.push(skin)
           }
@@ -757,11 +964,7 @@ Item {
   }
 
   Component.onCompleted: {
-    if (isPrimary) Bridge.registerEngine(engine)
     rescanUserSkins()
-  }
-
-  Component.onDestruction: {
-    if (isPrimary) Bridge.unregisterEngine(engine)
+    loadTimer.restart()
   }
 }

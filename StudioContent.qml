@@ -765,48 +765,76 @@ Column {
           SliderRow {
             navKey: "height"
             label: root.tr("label.height", "Height")
-            valueText: root.num(root.engine ? root.engine.skinHeight : 30) + " px"
+            autoAvailable: true
+            isAuto: !!root.engine && root.engine.look.heightAuto
+            valueText: isAuto ? root.tr("value.auto").arg(root.num(root.engine.look.barSizePx) + " px")
+              : root.num(root.engine ? root.engine.skinHeight : 30) + " px"
             minimum: 22
             maximum: 48
             step: 1
             value: root.engine ? root.engine.skinHeight : 30
             onChangedValue: function(v) { root.engine.updateField("height", Math.round(v)) }
+            onAutoToggled: root.engine.updateField("height", isAuto ? root.engine.skinHeight : "auto")
           }
 
           SliderRow {
             navKey: "edgeMargin"
             visible: !!root.engine && root.engine.mode !== "edge"
             label: root.tr("label.edgeMargin", "Edge gap")
-            valueText: root.num(root.engine ? root.engine.edgeMargin : 6) + " px"
+            autoAvailable: true
+            isAuto: !!root.engine && root.engine.look.edgeAuto
+            valueText: isAuto ? root.tr("value.auto").arg(root.num(root.engine.look.edgePx) + " px")
+              : root.num(root.engine ? root.engine.edgeMargin : 6) + " px"
             minimum: 0
             maximum: 20
             step: 1
             value: root.engine ? root.engine.edgeMargin : 6
             onChangedValue: function(v) { root.engine.updateField("edgeMargin", Math.round(v)) }
+            onAutoToggled: root.engine.updateField("edgeMargin", isAuto ? root.engine.edgeMargin : "auto")
           }
 
           SliderRow {
             navKey: "sideMargin"
             visible: !!root.engine && root.engine.mode !== "edge"
             label: root.tr("label.sideMargin", "Side margin")
-            valueText: root.num(root.engine ? root.engine.sideMargin : 10) + " px"
+            autoAvailable: true
+            isAuto: !!root.engine && root.engine.look.sideAuto
+            valueText: isAuto ? root.tr("value.auto").arg(root.num(root.engine.look.sidePx) + " px")
+              : root.num(root.engine ? root.engine.sideMargin : 10) + " px"
             minimum: 0
             maximum: 36
             step: 1
             value: root.engine ? root.engine.sideMargin : 10
             onChangedValue: function(v) { root.engine.updateField("sideMargin", Math.round(v)) }
+            onAutoToggled: root.engine.updateField("sideMargin", isAuto ? root.engine.sideMargin : "auto")
+          }
+
+          SliderRow {
+            navKey: "width"
+            visible: !!root.engine && root.engine.mode !== "edge"
+            label: root.tr("label.width", "Width")
+            valueText: root.num(root.engine ? root.engine.look.widthPercent : 100) + "%"
+            minimum: 30
+            maximum: 100
+            step: 5
+            value: root.engine ? root.engine.look.widthPercent : 100
+            onChangedValue: function(v) { root.engine.updateField("width", Math.round(v)) }
           }
 
           SliderRow {
             navKey: "radius"
             visible: !!root.engine && root.engine.mode !== "edge"
             label: root.tr("label.radius", "Corners")
-            valueText: root.num(root.engine ? root.engine.radius : 10) + " px"
+            autoAvailable: true
+            isAuto: !!root.engine && root.engine.look.radiusAuto
+            valueText: isAuto ? root.tr("value.auto").arg(root.num(root.engine.look.radiusPx) + " px")
+              : root.num(root.engine ? root.engine.radius : 10) + " px"
             minimum: 0
             maximum: 24
             step: 1
             value: root.engine ? root.engine.radius : 10
             onChangedValue: function(v) { root.engine.updateField("radius", Math.round(v)) }
+            onAutoToggled: root.engine.updateField("radius", isAuto ? root.engine.radius : "auto")
           }
 
           SliderRow {
@@ -828,13 +856,17 @@ Column {
           SliderRow {
             navKey: "opacity"
             label: root.tr("label.opacity", "Opacity")
-            valueText: root.percent(root.engine ? root.engine.backgroundAlpha : 0.92)
-            minimum: 0.1
+            autoAvailable: true
+            isAuto: !!root.engine && root.engine.look.alphaAuto
+            valueText: isAuto ? root.tr("value.auto").arg(root.percent(root.engine.backgroundAlpha))
+              : root.percent(root.engine ? root.engine.backgroundAlpha : 0.92)
+            minimum: 0
             maximum: 1.0
             step: 0.02
             integer: false
             value: root.engine ? root.engine.backgroundAlpha : 0.92
             onChangedValue: function(v) { root.engine.updateField("backgroundAlpha", v) }
+            onAutoToggled: root.engine.updateField("backgroundAlpha", isAuto ? root.engine.backgroundAlpha : "auto")
           }
 
           SliderRow {
@@ -966,6 +998,26 @@ Column {
             hint: root.tr("label.revealOnWorkspaceHint", "")
             checked: root.engine ? root.engine.prefs.revealOnWorkspace : false
             onToggled: root.engine.setPref("revealOnWorkspace", !root.engine.prefs.revealOnWorkspace)
+          }
+        }
+
+        Section {
+          title: root.tr("section.omarchy", "Omarchy")
+
+          ToggleRow {
+            navKey: "omarchyMenu"
+            label: root.tr("label.omarchyMenu", "Show in Omarchy menu")
+            hint: root.tr("label.omarchyMenuHint", "")
+            checked: root.engine ? root.engine.prefs.omarchyMenu : false
+            onToggled: root.engine.setPref("omarchyMenu", !root.engine.prefs.omarchyMenu)
+          }
+
+          ToggleRow {
+            navKey: "updateCheck"
+            label: root.tr("label.updateCheck", "Check after Omarchy updates")
+            hint: root.tr("label.updateCheckHint", "")
+            checked: root.engine ? root.engine.prefs.updateCheck : false
+            onToggled: root.engine.setPref("updateCheck", !root.engine.prefs.updateCheck)
           }
         }
       }
@@ -1208,11 +1260,16 @@ Column {
     property real step: 1
     property bool integer: true
     property real value: 0
+    // "Auto" follows Omarchy (theme tokens, Hyprland gaps and rounding).
+    property bool autoAvailable: false
+    property bool isAuto: false
     signal changedValue(real v)
+    signal autoToggled()
 
     width: parent ? parent.width : 0
     implicitHeight: sliderColumn.implicitHeight
     height: implicitHeight
+    onActivate: if (autoAvailable) autoToggled()
 
     onAdjust: function(direction) {
       var next = Math.max(minimum, Math.min(maximum, value + step * direction))
@@ -1235,6 +1292,34 @@ Column {
           font.family: Style.font.family
           font.pixelSize: Style.font.bodySmall
           Layout.fillWidth: true
+        }
+        Rectangle {
+          visible: sRow.autoAvailable
+          Layout.preferredWidth: autoLabel.implicitWidth + Style.space(12)
+          Layout.preferredHeight: autoLabel.implicitHeight + Style.space(4)
+          radius: Math.min(height / 2, Style.cornerRadius)
+          color: sRow.isAuto ? Style.selectedFillFor(root.fg, Commons.Color.accent) : "transparent"
+          border.width: 1
+          border.color: sRow.isAuto ? Commons.Color.accent : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, autoMouse.containsMouse ? 0.5 : 0.25)
+
+          Text {
+            id: autoLabel
+            anchors.centerIn: parent
+            textFormat: Text.PlainText
+            text: root.tr("label.auto", "Auto")
+            color: sRow.isAuto ? Commons.Color.accent : root.dimFg
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            font.bold: sRow.isAuto
+          }
+
+          MouseArea {
+            id: autoMouse
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: sRow.autoToggled()
+          }
         }
         Text {
           textFormat: Text.PlainText

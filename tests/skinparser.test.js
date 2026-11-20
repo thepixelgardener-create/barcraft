@@ -99,7 +99,7 @@ test("state file: prefs, monitors and draft round-trip", () => {
   const st = P.parseStateToml(text)
   assert.strictEqual(st.activeSkinId, "islands")
   assert.strictEqual(st.followTheme, false)
-  assert.deepStrictEqual(st.prefs, { autohideDelay: 900, autohideWhen: "windows", revealOnWorkspace: true })
+  assert.deepStrictEqual(st.prefs, { autohideDelay: 900, autohideWhen: "windows", revealOnWorkspace: true, omarchyMenu: false, updateCheck: false })
   assert.deepStrictEqual(st.monitors, { "HDMI-A-1": "frosted", "eDP-1": "theme" })
   assert.strictEqual(P.parseToml(text, "islands", "custom").name, "Draft's")
 })
@@ -146,7 +146,7 @@ test("theme colors parse with every key mapped", () => {
 
 test("old motion prefs in a state file are ignored", () => {
   const st = P.parseStateToml("[barcraft]\nart-motion = \"always\"\npause-on-battery = true\n")
-  assert.deepStrictEqual(Object.keys(st.prefs).sort(), ["autohideDelay", "autohideWhen", "revealOnWorkspace"])
+  assert.deepStrictEqual(Object.keys(st.prefs).sort(), ["autohideDelay", "autohideWhen", "omarchyMenu", "revealOnWorkspace", "updateCheck"])
   assert.ok(!/art-motion|pause-on-battery/.test(P.serializeStateToml("floating", true, null, st.prefs, null)))
 })
 
@@ -163,6 +163,94 @@ test("standard mode round-trips and defaults off", () => {
   assert.strictEqual(s.mode, "edge")
   assert.strictEqual(s.border, "none")
   assert.strictEqual(s.radius + s.edgeMargin + s.sideMargin, 0)
+})
+
+test("auto values: parsed, kept, serialized, and the default", () => {
+  const s = P.parseToml("[bar-skin]\nradius = auto\nheight = \"auto\"\nedge-margin = 4\nbackground-alpha = \"AUTO\"\n", "a", "user")
+  assert.strictEqual(s.radius, "auto")
+  assert.strictEqual(s.height, "auto")
+  assert.strictEqual(s.edgeMargin, 4)
+  assert.strictEqual(s.backgroundAlpha, "auto")
+  const back = P.parseToml(P.serializeToml(s), "a", "user")
+  assert.strictEqual(back.radius, "auto")
+  assert.strictEqual(back.edgeMargin, 4)
+  assert.strictEqual(P.defaultSkin().radius, "auto")
+  assert.strictEqual(P.normalizeSkin({ radius: "round" }, "x").radius, "auto")
+})
+
+test("classic presets follow Omarchy; art presets keep their own geometry", () => {
+  const byId = Object.fromEntries(P.builtinSkins().map(s => [s.id, s]))
+  for (const id of ["floating", "islands", "frosted"]) {
+    assert.strictEqual(byId[id].radius, "auto", id)
+    assert.strictEqual(byId[id].sideMargin, "auto", id)
+    assert.strictEqual(byId[id].height, "auto", id)
+  }
+  assert.strictEqual(byId.capsule.radius, 16)
+  assert.strictEqual(byId.rocket.height, 34)
+})
+
+test("width is a clamped percentage and opacity may reach zero", () => {
+  assert.strictEqual(P.normalizeSkin({ width: 10 }, "w").width, 30)
+  assert.strictEqual(P.normalizeSkin({ width: 80 }, "w").width, 80)
+  assert.strictEqual(P.normalizeSkin({ backgroundAlpha: 0 }, "w").backgroundAlpha, 0)
+})
+
+test("shell.json state round-trips, including the draft and integration switches", () => {
+  const draft = P.normalizeSkin({ id: "d", name: "Bob's", radius: "auto", width: 70 }, "d", "custom")
+  const json = P.stateToJson("islands", false, draft,
+    { autohideDelay: 800, omarchyMenu: true, updateCheck: true }, { "HDMI-A-1": "editorial", "../x": "y" }, true)
+  const st = P.stateFromJson(JSON.parse(JSON.stringify(json)))
+  assert.strictEqual(st.activeSkinId, "islands")
+  assert.strictEqual(st.followTheme, false)
+  assert.strictEqual(st.standard, true)
+  assert.strictEqual(st.prefs.autohideDelay, 800)
+  assert.strictEqual(st.prefs.omarchyMenu, true)
+  assert.strictEqual(st.prefs.updateCheck, true)
+  assert.deepStrictEqual(st.monitors, { "HDMI-A-1": "editorial" })
+  assert.strictEqual(st.draft.name, "Bob's")
+  assert.strictEqual(st.draft.radius, "auto")
+  assert.strictEqual(st.draft.width, 70)
+  assert.ok(!("source" in json.draft) && !("category" in json.draft))
+})
+
+test("shell.json state tolerates junk", () => {
+  for (const junk of [null, 42, "x", [], { skin: { evil: 1 }, draft: [1], monitors: 5 }]) {
+    const st = P.stateFromJson(junk)
+    assert.strictEqual(typeof st.activeSkinId, "string")
+    assert.strictEqual(st.draft, null)
+  }
+})
+
+function parseJsonc(t) {
+  let o = "", i = 0
+  while (i < t.length) {
+    const c = t[i]
+    if (c === "\"") { let j = i + 1; while (j < t.length && t[j] !== "\"") { if (t[j] === "\\") j++; j++ } o += t.slice(i, j + 1); i = j + 1; continue }
+    if (c === "/" && t[i + 1] === "/") { while (i < t.length && t[i] !== "\n") i++; continue }
+    if (c === "/" && t[i + 1] === "*") { i = t.indexOf("*/", i + 2) + 2; continue }
+    o += c; i++
+  }
+  return JSON.parse(o.replace(/,(\s*[}\]])/g, "$1"))
+}
+
+test("Omarchy menu block: valid JSONC in, same file out", () => {
+  const entries = [["appearance.top-bar.barcraft", { label: "Barcraft" }], ["appearance.top-bar.barcraft.studio", { label: "Studio", action: "omarchy-shell shell toggle thepixelgardener.barcraft" }]]
+  const cases = [
+    "{\n  // header\n  \"a\": {\"action\":\"xdg-open https://x.org//y\"} // note\n}\n",
+    "{\n  \"a\": 1 /* c } */\n}",
+    "{\n  \"a\": 1,\n}\n",
+    "{}",
+    ""
+  ]
+  for (const t of cases) {
+    const added = P.applyMenuBlock(t, entries)
+    const obj = parseJsonc(added)
+    assert.ok(obj["appearance.top-bar.barcraft.studio"], t)
+    assert.strictEqual(P.applyMenuBlock(added, entries), added, "idempotent")
+    const removed = P.applyMenuBlock(added, null)
+    assert.deepStrictEqual(t.trim() ? parseJsonc(removed) : {}, t.trim() ? parseJsonc(t) : {})
+  }
+  assert.strictEqual(P.applyMenuBlock("not json at all", entries), "not json at all")
 })
 
 console.log("SkinParser: " + passed + " tests passed")

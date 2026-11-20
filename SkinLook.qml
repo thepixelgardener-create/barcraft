@@ -20,12 +20,14 @@ QtObject {
   property color sharedForeground: Commons.Color.bar.text
   // Omarchy standard: the stock bar's look, whatever skin is chosen.
   property bool standard: false
+  // Left/right bar: "auto" height is Omarchy's vertical bar size.
+  property bool vertical: false
 
   readonly property var standardSkin: SkinParser.standardSkin()
   readonly property var s: standard ? standardSkin : (skin || SkinParser.defaultSkin())
 
   function num(v, fallback) {
-    if (v === undefined || v === null || v === "") return fallback
+    if (v === undefined || v === null || v === "" || v === "auto") return fallback
     var n = Number(v)
     return isFinite(n) ? n : fallback
   }
@@ -56,14 +58,37 @@ QtObject {
   readonly property string customForeground: s.customForeground || ""
   readonly property string customAccent: s.customAccent || ""
   readonly property string gradientTo: s.gradientTo || ""
-  readonly property int skinHeight: num(s.height, 30)
-  readonly property int edgeMargin: mode === "edge" ? 0 : num(s.edgeMargin, 6)
-  readonly property int sideMargin: mode === "edge" ? 0 : num(s.sideMargin, 10)
+  // Geometry. "auto" follows Omarchy: the theme's bar size, Omarchy's panel
+  // gap to the screen edge, Hyprland's gaps_out at the sides (so the bar
+  // lines up with tiled windows), Hyprland's rounding, the theme's bar alpha.
+  // The *Px values are logical pixels, ready to use; the plain ones are in
+  // skin units for the Studio's sliders.
+  readonly property real spaceScale: Math.max(0.01, Style.spaceReal(100) / 100)
+  readonly property bool heightAuto: s.height === "auto"
+  readonly property bool edgeAuto: s.edgeMargin === "auto"
+  readonly property bool sideAuto: s.sideMargin === "auto"
+  readonly property bool radiusAuto: s.radius === "auto"
+  readonly property bool alphaAuto: s.backgroundAlpha === "auto"
+
+  readonly property int stockBarSize: vertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
+  readonly property int barSizePx: {
+    if (heightAuto) return stockBarSize
+    var px = Style.space(num(s.height, 30))
+    return vertical ? Math.max(Style.bar.sizeVertical, px) : px
+  }
+  readonly property int edgePx: mode === "edge" ? 0 : (edgeAuto ? Style.gapsOut : Style.space(num(s.edgeMargin, 6)))
+  readonly property int sidePx: mode === "edge" ? 0 : (sideAuto ? Style.gapsOut * 2 : Style.space(num(s.sideMargin, 10)))
+  readonly property int radiusPx: mode === "edge" ? 0 : (radiusAuto ? Style.cornerRadius : Style.space(num(s.radius, 10)))
+  readonly property int widthPercent: mode === "edge" ? 100 : Math.max(30, Math.min(100, num(s.width, 100)))
+
+  readonly property int skinHeight: heightAuto ? Math.round(stockBarSize / spaceScale) : num(s.height, 30)
+  readonly property int edgeMargin: edgeAuto ? Math.round(edgePx / spaceScale) : (mode === "edge" ? 0 : num(s.edgeMargin, 6))
+  readonly property int sideMargin: sideAuto ? Math.round(sidePx / spaceScale) : (mode === "edge" ? 0 : num(s.sideMargin, 10))
   readonly property int sectionGap: num(s.sectionGap, 8)
   readonly property int innerPadding: num(s.innerPadding, 10)
-  readonly property int radius: mode === "edge" ? 0 : num(s.radius, 10)
+  readonly property int radius: radiusAuto ? Math.round(radiusPx / spaceScale) : (mode === "edge" ? 0 : num(s.radius, 10))
   readonly property real iconScale: num(s.iconScale, 1.0)
-  readonly property real backgroundAlpha: num(s.backgroundAlpha, 0.92)
+  readonly property real backgroundAlpha: alphaAuto ? Commons.Color.bar.background.a : num(s.backgroundAlpha, 0.92)
   readonly property string fill: s.fill || "solid"
   readonly property bool gradientActive: fill === "gradient"
   readonly property bool blur: !!s.blur

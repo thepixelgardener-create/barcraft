@@ -3,7 +3,6 @@ import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-import "BarcraftBridge.js" as Bridge
 
 // The Barcraft button. Click opens Barcraft Studio, a keyboard panel, so it
 // also opens from a keybinding (`omarchy-shell shell toggle
@@ -17,15 +16,28 @@ BarWidget {
 
   property bool panelOpen: false
   property bool popoutSwitchClosing: false
-  property var bridgedEngine: Bridge.engine()
-  // The Barcraft bar's engine. Omarchy loads a bar plugin's widget only while
-  // that bar is active, so this is the bar's engine; the local one only
-  // bridges a moment where the bar reloads under the widget.
-  readonly property var skinEngine: bridgedEngine ? bridgedEngine : localEngineLoader.item
+  // The engine of the Barcraft bar this widget sits in, found by walking up
+  // to the bar strip (see Bar.qml barcraftEngine). Omarchy loads a bar
+  // plugin's widget only while that bar is active, so it is always there
+  // once the widget is placed; the local engine only covers the moment
+  // before, and must never be what the Studio edits.
+  property var hostEngine: null
+  readonly property var skinEngine: hostEngine ? hostEngine : localEngineLoader.item
+
+  function locateEngine() {
+    for (var p = root.parent; p; p = p.parent) {
+      if ("barcraftEngine" in p && p.barcraftEngine) {
+        if (hostEngine !== p.barcraftEngine) hostEngine = p.barcraftEngine
+        return
+      }
+    }
+  }
+
+  onParentChanged: Qt.callLater(root.locateEngine)
 
   Loader {
     id: localEngineLoader
-    active: !root.bridgedEngine
+    active: !root.hostEngine
     sourceComponent: Component {
       SkinEngine { isPrimary: false }
     }
@@ -35,6 +47,7 @@ BarWidget {
   readonly property bool opened: panelOpen
 
   function open() {
+    locateEngine()
     if (skinEngine) skinEngine.rescanUserSkins()
     panelOpen = true
   }
@@ -67,18 +80,7 @@ BarWidget {
     directory: Qt.resolvedUrl("i18n")
   }
 
-  Component.onCompleted: {
-    Bridge.subscribe(root._onEngineChanged)
-    root.bridgedEngine = Bridge.engine()
-  }
-
-  Component.onDestruction: {
-    Bridge.unsubscribe(root._onEngineChanged)
-  }
-
-  function _onEngineChanged(eng) {
-    root.bridgedEngine = eng
-  }
+  Component.onCompleted: Qt.callLater(root.locateEngine)
 
   WidgetButton {
     id: button
@@ -98,6 +100,7 @@ BarWidget {
       return barcraftStrings.t("tooltip").arg(name)
     }
     onPressed: function(mouseButton) {
+      root.locateEngine()
       if (mouseButton === Qt.RightButton) {
         if (root.skinEngine) root.skinEngine.cycleSkin()
       } else {

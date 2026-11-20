@@ -702,6 +702,10 @@ Item {
     id: skin
     barGlassy: root.glassy
     barTransparent: root.transparent
+    shellApi: root.shell
+    barConfig: root.barConfig
+    manifest: root.manifest
+    vertical: root.vertical
   }
   // The engine by a name no SkinLook property shadows.
   readonly property var barcraft: skin
@@ -712,13 +716,18 @@ Item {
   ShellIpc {
     target: "barcraft"
 
+    function ping(): string { return "ok" }
+    // The id the bar wears: a skin id, "standard", "theme" or "draft".
+    function current(): string { return skin.currentId() }
+    function doctor(): string { return skin.doctor() }
     function reveal(): void { root.barcraftRevealSerial++ }
-    function toggleAutoHide(): void { skin.toggleAutoHide() }
-    function next(): string { return skin.cycleSkin() }
-    function setSkin(id: string): void { skin.selectSkin(id) }
-    function followTheme(): void { skin.setFollowTheme(true) }
+    // Changes made here show their result in Omarchy's OSD.
+    function toggleAutoHide(): void { skin.toggleAutoHide(); skin.announce() }
+    function next(): string { var name = skin.cycleSkin(); skin.announce(); return name }
+    function setSkin(id: string): void { skin.selectSkin(id); skin.announce() }
+    function followTheme(): void { skin.setFollowTheme(true); skin.announce() }
     // Omarchy's own bar look on or off; skins stay for when it goes off.
-    function toggleStandard(): void { skin.setStandard(!skin.standard) }
+    function toggleStandard(): void { skin.setStandard(!skin.standard); skin.announce() }
   }
 
   // Whether a workspace holds any window, for auto-hide's "only with windows".
@@ -732,12 +741,9 @@ Item {
   }
 
   readonly property bool vertical: position === "left" || position === "right"
-  function barSizeForHeight(height) {
-    return vertical ? Math.max(Style.bar.sizeVertical, Style.space(height)) : Style.space(height)
-  }
-  // Omarchy standard: the stock bar's own size tokens.
-  readonly property int stockBarSize: vertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
-  readonly property int barSize: skin.standardActive ? stockBarSize : barSizeForHeight(skin.skinHeight)
+  // The main skin's size in logical pixels: Omarchy's own bar size tokens
+  // for "auto" and Omarchy standard, else the skin's height.
+  readonly property int barSize: skin.look.barSizePx
 
   // Display cutouts (a camera notch) the platform's own package describes in
   // the fixed platform root, which no environment variable moves. Most machines
@@ -1732,14 +1738,15 @@ Item {
       useSharedForeground: true
       sharedForeground: root.barcraft.effectiveForeground
       standard: root.barcraft.standardFor(barWindow.screen ? barWindow.screen.name : "")
+      vertical: root.vertical
     }
     readonly property var barLook: pskin
     // What windows make room for comes from the committed skin, so hovering a
     // preview never reflows the tiled windows.
     readonly property var zone: skin.zoneFor(screen ? screen.name : "")
 
-    readonly property int edgeGap: Style.space(pskin.edgeMargin)
-    readonly property int sideGap: Style.space(pskin.sideMargin)
+    readonly property int edgeGap: pskin.edgePx
+    readonly property int sideGap: pskin.sidePx
     readonly property bool isIslandMode: pskin.mode === "islands"
     property bool autoHideRevealed: false
 
@@ -1783,9 +1790,7 @@ Item {
     // An explicit zone instead of Auto: the reserved area stays the strip's
     // thickness + floating edge gap, or 0 while auto-hide is on.
     exclusionMode: (root.barHidden || zone.autoHide) ? ExclusionMode.Ignore : ExclusionMode.Normal
-    exclusiveZone: zone.standard
-      ? root.thicknessForSize(screen, root.stockBarSize)
-      : root.thicknessForSize(screen, root.barSizeForHeight(zone.height)) + Style.space(zone.edgeMargin)
+    exclusiveZone: root.thicknessForSize(screen, zone.sizePx) + zone.edgePx
 
     // While this window's widget or bar-move drag is live, the whole surface
     // takes input (mask below), so the pointer never leaves the bar surface
@@ -1921,15 +1926,25 @@ Item {
     Item {
       id: barStrip
 
+      // How the Barcraft widget finds this bar's engine: by walking up its
+      // parents to here. Omarchy loads Bar.qml and the widget under different
+      // URLs, so a shared .pragma library gives each its own copy.
+      readonly property var barcraftEngine: root.barcraft
+
       readonly property int activeEdgeOffset: barWindow.effectivelyHidden ? -(barWindow.thickness + barWindow.edgeGap + Style.space(8)) : barWindow.edgeGap
+      // Along the bar: the room between the side margins, narrowed to the
+      // skin's width and centered.
+      readonly property real alongRoom: Math.max(0, (root.vertical ? parent.height : parent.width) - barWindow.sideGap * 2)
+      readonly property real alongLength: Math.round(alongRoom * pskin.widthPercent / 100)
+      readonly property real alongStart: barWindow.sideGap + Math.round((alongRoom - alongLength) / 2)
       x: root.vertical
         ? (root.position === "right" ? parent.width - barWindow.thickness - activeEdgeOffset : activeEdgeOffset)
-        : barWindow.sideGap
+        : alongStart
       y: root.vertical
-        ? barWindow.sideGap
+        ? alongStart
         : (root.position === "bottom" ? parent.height - barWindow.thickness - activeEdgeOffset : activeEdgeOffset)
-      width: root.vertical ? barWindow.thickness : Math.max(0, parent.width - barWindow.sideGap * 2)
-      height: root.vertical ? Math.max(0, parent.height - barWindow.sideGap * 2) : barWindow.thickness
+      width: root.vertical ? barWindow.thickness : alongLength
+      height: root.vertical ? alongLength : barWindow.thickness
       opacity: barWindow.effectivelyHidden ? 0 : 1
 
       Behavior on x { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
@@ -1974,7 +1989,7 @@ Item {
         customAccent: pskin.customAccentHex
         contrast: pskin.contrast
         vertical: root.vertical
-        cornerRadius: Style.space(pskin.radius)
+        cornerRadius: pskin.radiusPx
       }
 
       Loader {
@@ -2478,7 +2493,7 @@ Item {
 
     property var look: null
     readonly property bool clear: root.transparent || !look
-    readonly property real cornerRadius: look ? Math.min(Style.space(look.radius), Math.min(width, height) / 2) : 0
+    readonly property real cornerRadius: look ? Math.min(look.radiusPx, Math.min(width, height) / 2) : 0
     readonly property real shadowReach: look ? Style.space(2) + Style.space(3) * look.shadowStrength : 0
 
     RectangularShadow {

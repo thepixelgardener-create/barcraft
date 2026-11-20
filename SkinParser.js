@@ -57,7 +57,7 @@ function defaultSkin() {
   return {
     id: "floating",
     name: "Floating",
-    description: "Detached bar with soft corners and subtle border",
+    description: "Detached bar that lines up with your windows",
     category: "classic",
     mode: "floating",
     art: "none",
@@ -69,15 +69,19 @@ function defaultSkin() {
     customBackground: "",
     customForeground: "",
     customAccent: "",
-    height: 30,
-    edgeMargin: 6,
-    sideMargin: 10,
+    // "auto" follows Omarchy: the theme's bar size, Omarchy's panel gap,
+    // Hyprland's gaps_out (so the bar lines up with windows), Hyprland's
+    // rounding, and the theme's bar background alpha.
+    height: "auto",
+    edgeMargin: "auto",
+    sideMargin: "auto",
+    width: 100,
     sectionGap: 8,
     innerPadding: 10,
-    radius: 10,
+    radius: "auto",
     iconScale: 1.0,
     background: "bar.background",
-    backgroundAlpha: 0.92,
+    backgroundAlpha: "auto",
     fill: "solid",
     gradientTo: "",
     blur: false,
@@ -105,46 +109,46 @@ function builtinSkins() {
   return [
     preset({
       id: "floating", name: "Floating", category: "classic",
-      description: "Detached bar with soft corners and subtle border"
+      description: "Detached bar that lines up with your windows"
     }),
     preset({
       id: "islands", name: "Islands", category: "classic", mode: "islands",
       description: "Separate floating pills for left, center, and right",
-      sectionGap: 10, radius: 14, backgroundAlpha: 0.88, blur: true, borderAlpha: 0.24
+      sectionGap: 10, backgroundAlpha: 0.88, blur: true, borderAlpha: 0.24
     }),
     preset({
       id: "frosted", name: "Frosted", category: "classic",
       description: "Translucent glass bar with Hyprland blur behind it",
-      radius: 12, backgroundAlpha: 0.42, blur: true, borderAlpha: 0.30
+      backgroundAlpha: 0.42, blur: true, borderAlpha: 0.30
     }),
     preset({
       id: "capsule", name: "Capsule", category: "classic",
       description: "Rounded bar on a soft shadow with pill-shaped widgets",
-      radius: 16, height: 32, edgeMargin: 8, sideMargin: 14, backgroundAlpha: 0.94,
+      radius: 16, backgroundAlpha: 0.94,
       shadow: true, shadowStrength: 0.55, widgetStyle: "pills", border: "none", borderWidth: 0
     }),
     preset({
       id: "editorial", name: "Editorial", category: "classic", mode: "edge",
       description: "Sharp 0px corners with a crisp 1px accent rule",
-      height: 28, edgeMargin: 0, sideMargin: 0, sectionGap: 6, innerPadding: 8, radius: 0,
-      backgroundAlpha: 1.0, border: "accent", borderAlpha: 0.65
+      edgeMargin: 0, sideMargin: 0, sectionGap: 6, innerPadding: 8, radius: 0,
+      border: "accent", borderAlpha: 0.65
     }),
     preset({
       id: "barber", name: "Barber Pole", category: "wild", art: "barber",
       description: "3D barber pole cylinder with chrome caps",
-      height: 32, sideMargin: 12, innerPadding: 12, radius: 16, backgroundAlpha: 0.96,
+      height: 32, edgeMargin: 6, sideMargin: 12, innerPadding: 12, radius: 16, backgroundAlpha: 0.96,
       border: "none", borderAlpha: 0.0, borderWidth: 0
     }),
     preset({
       id: "runeforge", name: "Runeforge", category: "wild", art: "runeforge",
       description: "Forged obsidian stone, antique gold & glowing runes",
-      height: 34, edgeMargin: 5, innerPadding: 14, radius: 4, backgroundAlpha: 0.98,
+      height: 34, edgeMargin: 5, sideMargin: 10, innerPadding: 14, radius: 4, backgroundAlpha: 0.98,
       border: "none", borderAlpha: 0.0, borderWidth: 0
     }),
     preset({
       id: "rocket", name: "Long Rocket", category: "wild", art: "rocket",
       description: "Full-width spacecraft with thruster & nosecone",
-      height: 34, sideMargin: 8, innerPadding: 12, radius: 0, backgroundAlpha: 0.96,
+      height: 34, edgeMargin: 6, sideMargin: 8, innerPadding: 12, radius: 0, backgroundAlpha: 0.96,
       border: "none", borderAlpha: 0.0, borderWidth: 0
     })
   ]
@@ -157,8 +161,8 @@ function standardSkin() {
   var s = preset({
     id: "standard", name: "Omarchy standard", category: "standard", mode: "edge",
     description: "The bar exactly as Omarchy ships it",
-    height: 26, edgeMargin: 0, sideMargin: 0, sectionGap: 4, innerPadding: 8, radius: 0,
-    backgroundAlpha: 1.0, border: "none", borderWidth: 0, borderAlpha: 0
+    height: "auto", edgeMargin: 0, sideMargin: 0, sectionGap: 4, innerPadding: 8, radius: 0,
+    backgroundAlpha: "auto", border: "none", borderWidth: 0, borderAlpha: 0
   })
   s.category = "standard"
   return s
@@ -208,6 +212,19 @@ function round2(n) {
   return Math.round(n * 100) / 100
 }
 
+function isAuto(raw) {
+  return String(raw === undefined || raw === null ? "" : raw).trim().toLowerCase() === "auto"
+}
+
+// A number in range, or "auto" (follow Omarchy). A missing value falls back,
+// and the fallback may itself be "auto".
+function autoOr(raw, min, max, fallback, whole) {
+  if (isAuto(raw)) return "auto"
+  var v = clamp(raw, min, max, fallback)
+  if (v === "auto") return "auto"
+  return whole ? Math.round(v) : round2(v)
+}
+
 function normalizeSkin(raw, fallbackId, source) {
   var base = defaultSkin()
   var obj = raw && typeof raw === "object" ? raw : {}
@@ -248,15 +265,16 @@ function normalizeSkin(raw, fallbackId, source) {
     customBackground: normalizeColorRef(obj.customBackground),
     customForeground: normalizeColorRef(obj.customForeground),
     customAccent: normalizeColorRef(obj.customAccent),
-    height: Math.round(clamp(obj.height, 22, 56, base.height)),
-    edgeMargin: Math.round(clamp(obj.edgeMargin, 0, 24, base.edgeMargin)),
-    sideMargin: Math.round(clamp(obj.sideMargin, 0, 48, base.sideMargin)),
+    height: autoOr(obj.height, 22, 56, base.height, true),
+    edgeMargin: autoOr(obj.edgeMargin, 0, 24, base.edgeMargin, true),
+    sideMargin: autoOr(obj.sideMargin, 0, 48, base.sideMargin, true),
+    width: Math.round(clamp(obj.width, 30, 100, base.width)),
     sectionGap: Math.round(clamp(obj.sectionGap, 0, 32, base.sectionGap)),
     innerPadding: Math.round(clamp(obj.innerPadding, 4, 24, base.innerPadding)),
-    radius: Math.round(clamp(obj.radius, 0, 28, base.radius)),
+    radius: autoOr(obj.radius, 0, 28, base.radius, true),
     iconScale: round2(clamp(obj.iconScale, 0.8, 1.5, base.iconScale)),
     background: String(obj.background || base.background).trim() || "bar.background",
-    backgroundAlpha: round2(clamp(obj.backgroundAlpha, 0, 1, base.backgroundAlpha)),
+    backgroundAlpha: autoOr(obj.backgroundAlpha, 0, 1, base.backgroundAlpha, false),
     fill: oneOf(obj.fill || base.fill, VALID_FILLS, base.fill),
     gradientTo: normalizeColorRef(obj.gradientTo),
     blur: parseBool(obj.blur, base.blur),
@@ -377,6 +395,7 @@ var KEY_MAP = {
   "inner-padding": "innerPadding",
   "inner-padding-x": "innerPadding",
   "radius": "radius",
+  "width": "width",
   "icon-scale": "iconScale",
   "background": "background",
   "background-alpha": "backgroundAlpha",
@@ -451,6 +470,11 @@ function parseFromShellValues(shellValues, lookup) {
   return skin
 }
 
+function tomlNumberOrAuto(value, fixed) {
+  if (value === "auto") return "\"auto\""
+  return fixed ? Number(value).toFixed(2) : String(value)
+}
+
 function serializeToml(skin) {
   var s = normalizeSkin(skin, skin ? skin.id : "custom", "user")
   var lines = [
@@ -470,18 +494,19 @@ function serializeToml(skin) {
     s.customForeground ? "custom-foreground = \"" + s.customForeground + "\"" : null,
     s.customAccent ? "custom-accent    = \"" + s.customAccent + "\"" : null,
     "",
-    "# Geometry",
-    "height           = " + s.height,
-    "edge-margin      = " + s.edgeMargin,
-    "side-margin      = " + s.sideMargin,
+    "# Geometry (\"auto\" follows Omarchy and Hyprland)",
+    "height           = " + tomlNumberOrAuto(s.height),
+    "edge-margin      = " + tomlNumberOrAuto(s.edgeMargin),
+    "side-margin      = " + tomlNumberOrAuto(s.sideMargin),
+    "width            = " + s.width,
     "section-gap      = " + s.sectionGap,
     "inner-padding-x  = " + s.innerPadding,
-    "radius           = " + s.radius,
+    "radius           = " + tomlNumberOrAuto(s.radius),
     "icon-scale       = " + s.iconScale.toFixed(2),
     "",
     "# Surface & Border",
     "background       = \"" + s.background + "\"",
-    "background-alpha = " + s.backgroundAlpha.toFixed(2),
+    "background-alpha = " + tomlNumberOrAuto(s.backgroundAlpha, true),
     "fill             = \"" + s.fill + "\"",
     s.gradientTo ? "gradient-to      = \"" + s.gradientTo + "\"" : null,
     "blur             = " + (s.blur ? "true" : "false"),
@@ -509,7 +534,9 @@ function defaultPrefs() {
   return {
     autohideDelay: 320,
     autohideWhen: "always",
-    revealOnWorkspace: false
+    revealOnWorkspace: false,
+    omarchyMenu: false,
+    updateCheck: false
   }
 }
 
@@ -519,7 +546,9 @@ function normalizePrefs(raw) {
   return {
     autohideDelay: Math.round(clamp(p.autohideDelay, 100, 3000, base.autohideDelay)),
     autohideWhen: oneOf(p.autohideWhen, VALID_AUTOHIDE_WHEN, base.autohideWhen),
-    revealOnWorkspace: parseBool(p.revealOnWorkspace, base.revealOnWorkspace)
+    revealOnWorkspace: parseBool(p.revealOnWorkspace, base.revealOnWorkspace),
+    omarchyMenu: parseBool(p.omarchyMenu, base.omarchyMenu),
+    updateCheck: parseBool(p.updateCheck, base.updateCheck)
   }
 }
 
@@ -707,6 +736,164 @@ function applyBarIconOverrides(text, scale) {
   return result
 }
 
+// ---------------------------------------------------------------------------
+// shell.json: Barcraft's state lives in the `bar.barcraft` object, beside
+// Omarchy's own bar settings, and the host writes it like every other
+// setting (shell.mutateShellConfig). Plain JSON, camelCase like shell.json.
+
+var SKIN_JSON_FIELDS = [
+  "name", "description", "mode", "art", "themeTint", "bezel", "bezelStrength",
+  "contrast", "surfaceTone", "customBackground", "customForeground", "customAccent",
+  "height", "edgeMargin", "sideMargin", "width", "sectionGap", "innerPadding", "radius",
+  "iconScale", "backgroundAlpha", "fill", "gradientTo", "blur", "border", "borderAlpha",
+  "borderWidth", "shadow", "shadowStrength", "widgetStyle", "visibility", "hoverEdgePx",
+  "accentHairline"
+]
+
+function skinToJson(skin) {
+  var s = normalizeSkin(skin, skin ? skin.id : "custom", "custom")
+  var out = { id: s.id }
+  for (var i = 0; i < SKIN_JSON_FIELDS.length; i++) {
+    var key = SKIN_JSON_FIELDS[i]
+    if (s[key] === "" && (key === "description" || key.indexOf("custom") === 0 || key === "gradientTo")) continue
+    out[key] = s[key]
+  }
+  return out
+}
+
+function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard) {
+  var p = normalizePrefs(prefs)
+  var out = {
+    standard: !!standard,
+    skin: slugify(activeSkinId),
+    followTheme: !!followTheme,
+    autohideDelay: p.autohideDelay,
+    autohideWhen: p.autohideWhen,
+    revealOnWorkspace: p.revealOnWorkspace,
+    omarchyMenu: p.omarchyMenu,
+    updateCheck: p.updateCheck
+  }
+  var mons = {}
+  var any = false
+  for (var screen in (monitors || {})) {
+    var name = sanitizeScreenName(screen)
+    var id = monitors[screen]
+    if (!name || !id) continue
+    mons[name] = id === "theme" ? "theme" : slugify(id)
+    any = true
+  }
+  if (any) out.monitors = mons
+  if (draft) out.draft = skinToJson(draft)
+  return out
+}
+
+function stateFromJson(obj, lookup) {
+  var o = obj && typeof obj === "object" && !Array.isArray(obj) ? obj : {}
+  var state = {
+    activeSkinId: o.skin !== undefined ? slugify(o.skin) : "floating",
+    followTheme: parseBool(o.followTheme, true),
+    standard: parseBool(o.standard, false),
+    prefs: normalizePrefs(o),
+    monitors: {},
+    draft: null
+  }
+  var mons = o.monitors && typeof o.monitors === "object" ? o.monitors : {}
+  for (var screen in mons) {
+    var name = sanitizeScreenName(screen)
+    var id = String(mons[screen] || "").trim()
+    if (!name || !id) continue
+    state.monitors[name] = id === "theme" ? "theme" : slugify(id)
+  }
+  if (o.draft && typeof o.draft === "object" && !Array.isArray(o.draft)) {
+    var base = null
+    if (o.draft.preset !== undefined && typeof lookup === "function") base = lookup(String(o.draft.preset))
+    var merged = base ? copySkin(base) : {}
+    for (var k in o.draft) merged[k] = o.draft[k]
+    state.draft = normalizeSkin(merged, state.activeSkinId, "custom")
+  }
+  return state
+}
+
+// ---------------------------------------------------------------------------
+// Omarchy's menu takes user entries from ~/.config/omarchy/extensions/
+// omarchy-menu.jsonc. Barcraft's live between two marker comments, so they
+// can be replaced or removed without touching anything else in the file.
+// `entries` is a list of [id, object] pairs, or null to remove the block.
+
+var MENU_BEGIN = "// barcraft:begin"
+var MENU_END = "// barcraft:end"
+
+// Index of every significant JSONC character (not whitespace, not inside a
+// comment). Strings count from quote to quote, so "//" in a URL stays text.
+function jsoncSignificant(text) {
+  var out = []
+  var i = 0
+  var n = text.length
+  while (i < n) {
+    var c = text.charAt(i)
+    if (c === "\"") {
+      out.push(i)
+      i++
+      while (i < n && text.charAt(i) !== "\"") {
+        if (text.charAt(i) === "\\") i++
+        i++
+      }
+      if (i < n) out.push(i)
+      i++
+      continue
+    }
+    if (c === "/" && text.charAt(i + 1) === "/") {
+      while (i < n && text.charAt(i) !== "\n") i++
+      continue
+    }
+    if (c === "/" && text.charAt(i + 1) === "*") {
+      var endComment = text.indexOf("*/", i + 2)
+      i = endComment < 0 ? n : endComment + 2
+      continue
+    }
+    if (!/\s/.test(c)) out.push(i)
+    i++
+  }
+  return out
+}
+
+function applyMenuBlock(text, entries) {
+  var src = String(text || "")
+  var lines = src.length ? src.split("\n") : []
+  var kept = []
+  var inside = false
+  for (var i = 0; i < lines.length; i++) {
+    var t = lines[i].trim()
+    if (t.indexOf(MENU_BEGIN) === 0) { inside = true; continue }
+    if (t.indexOf(MENU_END) === 0) { inside = false; continue }
+    if (!inside) kept.push(lines[i])
+  }
+  var body = kept.join("\n")
+  if (!entries || entries.length === 0) return body
+  if (!body.trim()) body = "{\n}\n"
+
+  var sig = jsoncSignificant(body)
+  if (sig.length === 0) return src
+  var close = sig[sig.length - 1]
+  // Not a JSONC object we understand: leave the file alone.
+  if (body.charAt(close) !== "}" || body.charAt(sig[0]) !== "{") return src
+  var prev = sig.length > 1 ? sig[sig.length - 2] : -1
+  var head = body.slice(0, close)
+  // The entry before ours needs a comma right after it; JSONC allows a
+  // trailing comma after ours.
+  if (prev >= 0 && body.charAt(prev) !== "{" && body.charAt(prev) !== ",") {
+    head = body.slice(0, prev + 1) + "," + body.slice(prev + 1, close)
+  }
+  head = head.replace(/[ \t]*$/, "")
+  if (head.charAt(head.length - 1) !== "\n") head += "\n"
+  var block = ["  " + MENU_BEGIN + " (added by Barcraft; turn \"Show in Omarchy menu\" off in Barcraft Studio to remove)"]
+  for (var e = 0; e < entries.length; e++) {
+    block.push("  " + JSON.stringify(String(entries[e][0])) + ": " + JSON.stringify(entries[e][1]) + ",")
+  }
+  block.push("  " + MENU_END)
+  return head + block.join("\n") + "\n" + body.slice(close)
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     normalizeColorRef: normalizeColorRef,
@@ -725,6 +912,10 @@ if (typeof module !== "undefined") {
     themeColorMap: themeColorMap,
     applyBarIconOverrides: applyBarIconOverrides,
     canonicalSkinId: canonicalSkinId,
+    skinToJson: skinToJson,
+    stateToJson: stateToJson,
+    stateFromJson: stateFromJson,
+    applyMenuBlock: applyMenuBlock,
     slugify: slugify,
     sanitizeLabel: sanitizeLabel
   }

@@ -114,5 +114,15 @@
   "meta.standard": "Omarchy-Standard",
   "label.standard": "Omarchy-Standard",
   "label.standardHint": "Zeigt die Leiste genau so, wie Omarchy sie ausliefert. Deine Skins bleiben; wähle einen, um zurückzuwechseln.",
-  "hint.standardCraft": "Omarchy-Standard ist an. Jede Änderung hier wechselt zurück zu deinem Skin."
+  "hint.standardCraft": "Omarchy-Standard ist an. Jede Änderung hier wechselt zurück zu deinem Skin.",
+  "label.auto": "Auto",
+  "value.auto": "Auto · %1",
+  "label.width": "Breite",
+  "section.omarchy": "Omarchy",
+  "label.omarchyMenu": "Im Omarchy-Menü zeigen",
+  "label.omarchyMenuHint": "Darstellung → Menüleiste → Barcraft, mit Haken beim aktiven Skin",
+  "label.updateCheck": "Nach Omarchy-Updates prüfen",
+  "label.updateCheckHint": "Eine Benachrichtigung, wenn ein Omarchy-Update die Leiste ändert, auf der Barcraft aufbaut",
+  "menu.studio": "Barcraft Studio",
+  "hook.changed": "Omarchy hat seine Leiste aktualisiert. Führe scripts/sync-upstream.sh im Barcraft-Ordner aus, um das Update zu übernehmen."
 }

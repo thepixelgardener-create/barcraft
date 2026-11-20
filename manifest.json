@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "thepixelgardener.barcraft",
   "name": "Barcraft",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": "frueh",
   "license": "MIT",
-  "description": "Skinnable Omarchy bar: 8 skins, a keyboard-driven live Studio, per-monitor skins, theme-aware colors, and native shell.toml [bar-skin] support.",
+  "description": "Skinnable Omarchy bar built on Omarchy's foundation: presets that follow the theme and Hyprland, a keyboard-driven Studio, per-monitor skins, an Omarchy standard switch, settings in shell.json.",
   "keywords": [
     "bar",
     "skins",

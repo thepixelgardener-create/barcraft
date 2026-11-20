@@ -21,10 +21,13 @@ Item {
     paletteMap: thumb.paletteMap
   }
 
-  readonly property real barH: Math.max(9, Math.round(tl.skinHeight * k))
-  readonly property real topGap: tl.mode === "edge" ? 0 : Math.max(2, Math.round(tl.edgeMargin * k) + 2)
-  readonly property real sideGap: tl.mode === "edge" ? 0 : Math.max(3, Math.round(tl.sideMargin * k) + 3)
-  readonly property real barRadius: Math.min(barH / 2, tl.radius * k)
+  // From the resolved pixels, so "auto" draws with this desktop's own
+  // Hyprland rounding and gaps.
+  readonly property real barH: Math.max(9, Math.round(tl.barSizePx * k))
+  readonly property real topGap: tl.mode === "edge" ? 0 : Math.max(2, Math.round(tl.edgePx * k) + 2)
+  readonly property real sideRoom: tl.mode === "edge" ? 0 : Math.max(3, Math.round(tl.sidePx * k) + 3)
+  readonly property real sideGap: sideRoom + Math.round((width - sideRoom * 2) * (100 - tl.widthPercent) / 200)
+  readonly property real barRadius: Math.min(barH / 2, tl.radiusPx * k)
   readonly property color ink: tl.effectiveForeground
 
   clip: true

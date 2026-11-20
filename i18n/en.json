@@ -114,5 +114,15 @@
   "meta.standard": "Omarchy standard",
   "label.standard": "Omarchy standard",
   "label.standardHint": "Shows the bar exactly as Omarchy ships it. Your skins stay; pick one to switch back.",
-  "hint.standardCraft": "Omarchy standard is on. Changing anything here switches back to your skin."
+  "hint.standardCraft": "Omarchy standard is on. Changing anything here switches back to your skin.",
+  "label.auto": "Auto",
+  "value.auto": "Auto · %1",
+  "label.width": "Width",
+  "section.omarchy": "Omarchy",
+  "label.omarchyMenu": "Show in Omarchy menu",
+  "label.omarchyMenuHint": "Appearance → Menu Bar → Barcraft, with a check by the skin you wear",
+  "label.updateCheck": "Check after Omarchy updates",
+  "label.updateCheckHint": "A notification when an Omarchy update changes the bar Barcraft builds on",
+  "menu.studio": "Barcraft Studio",
+  "hook.changed": "Omarchy updated its bar. Run scripts/sync-upstream.sh in the Barcraft folder to carry the update over."
 }
