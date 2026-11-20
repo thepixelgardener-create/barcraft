@@ -50,6 +50,8 @@ Column {
     return out
   }
   readonly property var palette: engine ? engine.themeColors : ({})
+  // Skin tiles, three to a row.
+  readonly property real cardWidth: Math.floor((width - Style.spacing.md * 2) / 3)
 
   spacing: Style.spacing.panelGap
 
@@ -479,13 +481,13 @@ Column {
 
           Grid {
             width: parent.width
-            columns: 2
+            columns: 3
             columnSpacing: Style.spacing.md
             rowSpacing: Style.spacing.md
 
             SkinCard {
               visible: !!root.engine && root.engine.themeSkin !== null
-              width: Math.floor((parent.width - Style.spacing.md) / 2)
+              width: root.cardWidth
               cardId: "theme"
               skinData: root.engine ? root.engine.themeSkin : null
               title: root.tr("card.theme", "Theme skin")
@@ -497,7 +499,7 @@ Column {
 
               SkinCard {
                 required property var modelData
-                width: Math.floor((parent.width - Style.spacing.md) / 2)
+                width: root.cardWidth
                 cardId: modelData.id
                 skinData: modelData
                 title: modelData.name
@@ -521,17 +523,23 @@ Column {
             text: root.tr("section.wild", "Wild Craft")
           }
 
-          Repeater {
-            model: root.engine ? root.engine.wildSkins : []
+          Grid {
+            width: parent.width
+            columns: 3
+            columnSpacing: Style.spacing.md
+            rowSpacing: Style.spacing.md
 
-            SkinCard {
-              required property var modelData
-              width: parent.width
-              wide: true
-              cardId: modelData.id
-              skinData: modelData
-              title: modelData.name
-              subtitle: root.skinDescription(modelData)
+            Repeater {
+              model: root.engine ? root.engine.wildSkins : []
+
+              SkinCard {
+                required property var modelData
+                width: root.cardWidth
+                cardId: modelData.id
+                skinData: modelData
+                title: modelData.name
+                subtitle: root.skinDescription(modelData)
+              }
             }
           }
         }
@@ -572,7 +580,7 @@ Column {
 
           Grid {
             width: parent.width
-            columns: 2
+            columns: 3
             columnSpacing: Style.spacing.md
             rowSpacing: Style.spacing.md
             visible: !!root.engine && root.engine.userSkins.length > 0
@@ -582,7 +590,7 @@ Column {
 
               SkinCard {
                 required property var modelData
-                width: Math.floor((parent.width - Style.spacing.md) / 2)
+                width: root.cardWidth
                 cardId: modelData.id
                 skinData: modelData
                 title: modelData.name
@@ -696,6 +704,34 @@ Column {
               }
               onColorPicked: function(value) { root.engine.updateField(colorNav.field, value) }
             }
+          }
+        }
+
+        Section {
+          title: root.tr("section.tone", "Tone")
+
+          SliderRow {
+            navKey: "surfaceTone"
+            label: root.tr("label.surfaceTone", "Surface depth")
+            valueText: root.percent(root.engine ? root.engine.surfaceTone : 1)
+            minimum: 0.5
+            maximum: 1.5
+            step: 0.05
+            integer: false
+            value: root.engine ? root.engine.surfaceTone : 1
+            onChangedValue: function(v) { root.engine.updateField("surfaceTone", v) }
+          }
+
+          SliderRow {
+            navKey: "contrast"
+            label: root.tr("label.contrast", "Text contrast")
+            valueText: root.percent(root.engine ? root.engine.contrast : 1)
+            minimum: 0.5
+            maximum: 1.5
+            step: 0.05
+            integer: false
+            value: root.engine ? root.engine.contrast : 1
+            onChangedValue: function(v) { root.engine.updateField("contrast", v) }
           }
         }
       }
@@ -842,30 +878,6 @@ Column {
             value: root.engine ? root.engine.backgroundAlpha : 0.92
             onChangedValue: function(v) { root.engine.updateField("backgroundAlpha", v) }
             onAutoToggled: root.engine.updateField("backgroundAlpha", isAuto ? root.engine.backgroundAlpha : "auto")
-          }
-
-          SliderRow {
-            navKey: "surfaceTone"
-            label: root.tr("label.surfaceTone", "Surface depth")
-            valueText: root.percent(root.engine ? root.engine.surfaceTone : 1)
-            minimum: 0.5
-            maximum: 1.5
-            step: 0.05
-            integer: false
-            value: root.engine ? root.engine.surfaceTone : 1
-            onChangedValue: function(v) { root.engine.updateField("surfaceTone", v) }
-          }
-
-          SliderRow {
-            navKey: "contrast"
-            label: root.tr("label.contrast", "Text contrast")
-            valueText: root.percent(root.engine ? root.engine.contrast : 1)
-            minimum: 0.5
-            maximum: 1.5
-            step: 0.05
-            integer: false
-            value: root.engine ? root.engine.contrast : 1
-            onChangedValue: function(v) { root.engine.updateField("contrast", v) }
           }
 
           ChoiceRow {
@@ -1477,6 +1489,8 @@ Column {
     }
   }
 
+  // A skin as a compact tile: its thumbnail and name. The description is a
+  // tooltip; hovering already previews the skin on the bar itself.
   component SkinCard: NavItem {
     id: card
     property var skinData: null
@@ -1484,7 +1498,6 @@ Column {
     property string title: ""
     property string subtitle: ""
     property bool userSkin: false
-    property bool wide: false
     readonly property bool chosen: root.chosenId() === cardId
     readonly property bool hot: cardHover.hovered || navFocused
     readonly property bool renaming: root.renamingId === cardId && userSkin
@@ -1493,7 +1506,7 @@ Column {
     navKey: "card:" + cardId
     navGrid: true
     navPreviewId: cardId
-    height: wide ? Style.space(62) : Style.space(96)
+    height: Style.space(58)
 
     onActivate: root.pickSkin(cardId)
     onRemove: if (userSkin) root.requestDelete(cardId, title)
@@ -1528,82 +1541,54 @@ Column {
 
     Column {
       anchors.fill: parent
-      anchors.margins: Style.space(8)
-      spacing: Style.space(6)
+      anchors.margins: Style.space(6)
+      spacing: Style.space(5)
 
       SkinThumbnail {
         width: parent.width
-        height: card.wide ? Style.space(20) : Style.space(34)
+        height: Style.space(24)
         skin: card.skinData
         paletteMap: root.palette
       }
 
       RowLayout {
         width: parent.width
-        spacing: Style.space(6)
+        spacing: Style.space(4)
 
-        Column {
-          Layout.fillWidth: !card.wide
-          Layout.preferredWidth: card.wide ? Math.min(titleText.implicitWidth, parent.width * 0.45) : -1
-          spacing: Style.space(1)
+        Text {
+          visible: !card.renaming
+          Layout.fillWidth: true
+          textFormat: Text.PlainText
+          text: card.title
+          color: card.chosen ? Commons.Color.accent : root.fg
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          font.bold: true
+          elide: Text.ElideRight
+        }
 
-          Text {
-            id: titleText
-            visible: !card.renaming
-            width: card.wide ? Math.min(implicitWidth, parent.parent.width * 0.45) : parent.width
-            textFormat: Text.PlainText
-            text: card.title
-            color: card.chosen ? Commons.Color.accent : root.fg
-            font.family: Style.font.family
-            font.pixelSize: Style.font.bodySmall
-            font.bold: true
-            elide: Text.ElideRight
-          }
-
-          Loader {
-            active: card.renaming
-            visible: active
-            width: parent.width
-            sourceComponent: Component {
-              TextField {
-                text: card.title
-                maximumLength: 40
-                verticalPadding: Style.space(2)
-                Component.onCompleted: {
-                  forceActiveFocus()
-                  selectAll()
-                }
-                onAccepted: root.finishRename(card.cardId, text, true)
-                onActiveFocusChanged: if (!activeFocus) root.finishRename(card.cardId, text, false)
-                Keys.onEscapePressed: function(event) {
-                  event.accepted = true
-                  root.finishRename(card.cardId, text, false)
-                }
+        Loader {
+          active: card.renaming
+          visible: active
+          Layout.fillWidth: true
+          sourceComponent: Component {
+            TextField {
+              text: card.title
+              maximumLength: 40
+              verticalPadding: Style.space(1)
+              font.pixelSize: Style.font.caption
+              Component.onCompleted: {
+                forceActiveFocus()
+                selectAll()
+              }
+              onAccepted: root.finishRename(card.cardId, text, true)
+              onActiveFocusChanged: if (!activeFocus) root.finishRename(card.cardId, text, false)
+              Keys.onEscapePressed: function(event) {
+                event.accepted = true
+                root.finishRename(card.cardId, text, false)
               }
             }
           }
-
-          Text {
-            visible: !card.wide && !card.renaming
-            width: parent.width
-            textFormat: Text.PlainText
-            text: card.subtitle
-            color: root.dimFg
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            elide: Text.ElideRight
-          }
-        }
-
-        Text {
-          visible: card.wide
-          Layout.fillWidth: true
-          textFormat: Text.PlainText
-          text: card.subtitle
-          color: root.dimFg
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
         }
 
         CardIcon {
@@ -1621,6 +1606,12 @@ Column {
           onTriggered: root.requestDelete(card.cardId, card.title)
         }
       }
+    }
+
+    PanelToolTip {
+      visible: cardHover.hovered && card.subtitle !== "" && !card.renaming
+      delay: 500
+      text: card.subtitle
     }
   }
 

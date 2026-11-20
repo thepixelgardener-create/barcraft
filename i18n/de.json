@@ -124,5 +124,6 @@
   "tab.colors": "Farben",
   "tab.geometry": "Geometrie",
   "tab.surface": "Oberfläche",
-  "tab.behavior": "Verhalten"
+  "tab.behavior": "Verhalten",
+  "section.tone": "Ton"
 }
