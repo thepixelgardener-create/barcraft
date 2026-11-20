@@ -6,6 +6,24 @@
 
 Barcraft (`thepixelgardener.barcraft`) is Omarchy's own bar with a skin engine on top. It hosts every built-in and third-party `bar-widget`, popup, tooltip, drag-and-drop reordering and multi-monitor layout unchanged, and it is built from Omarchy's own foundation: its settings live in `shell.json`, its presets follow the theme and Hyprland, and it shows up in Omarchy's menu, OSD and update hooks.
 
+![Barcraft skins showcase](assets/skins-showcase.webp)
+
+## Studio
+
+<table>
+  <tr>
+    <td><img src="assets/studio-skins.webp" alt="Barcraft Studio — Skins tab"></td>
+    <td><img src="assets/studio-colors.webp" alt="Barcraft Studio — Colors tab"></td>
+  </tr>
+  <tr>
+    <td><img src="assets/studio-geometry.webp" alt="Barcraft Studio — Geometry tab"></td>
+    <td><img src="assets/studio-surface.webp" alt="Barcraft Studio — Surface tab"></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><img src="assets/studio-behavior.webp" alt="Barcraft Studio — Behavior tab" width="52%"></td>
+  </tr>
+</table>
+
 ## Highlights
 
 - **Omarchy standard.** The first tile in the Studio (click it again to leave) shows the bar exactly as Omarchy ships it, measured pixel-identical to `omarchy.bar`. Your skins stay; pick one to switch back. Unlike `omarchy bar use omarchy.bar`, the Barcraft pill and Studio stay on the bar, since Omarchy only loads a bar plugin's widget while that bar is active.
