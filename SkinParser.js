@@ -150,6 +150,20 @@ function builtinSkins() {
   ]
 }
 
+// Omarchy's own bar, as it ships: a flat strip along the edge in the theme's
+// bar colors. The bar draws it from Omarchy's tokens (size, background,
+// glassy), so this only says "no skin": no gaps, corners, border or art.
+function standardSkin() {
+  var s = preset({
+    id: "standard", name: "Omarchy standard", category: "standard", mode: "edge",
+    description: "The bar exactly as Omarchy ships it",
+    height: 26, edgeMargin: 0, sideMargin: 0, sectionGap: 4, innerPadding: 8, radius: 0,
+    backgroundAlpha: 1.0, border: "none", borderWidth: 0, borderAlpha: 0
+  })
+  s.category = "standard"
+  return s
+}
+
 function clamp(val, min, max, fallback) {
   if (val === undefined || val === null || val === "") return fallback
   var n = Number(val)
@@ -521,6 +535,7 @@ function parseStateToml(text) {
   var state = {
     activeSkinId: main["active-skin"] !== undefined ? slugify(main["active-skin"]) : "floating",
     followTheme: parseBool(main["follow-theme"], true),
+    standard: parseBool(main["standard"], false),
     prefs: normalizePrefs({
       autohideDelay: main["autohide-delay"],
       autohideWhen: main["autohide-when"],
@@ -537,11 +552,13 @@ function parseStateToml(text) {
   return state
 }
 
-function serializeStateToml(activeSkinId, followTheme, draft, prefs, monitors) {
+function serializeStateToml(activeSkinId, followTheme, draft, prefs, monitors, standard) {
   var p = normalizePrefs(prefs)
   var lines = [
     "# Barcraft configuration",
     "[barcraft]",
+    "# true shows Omarchy's own bar; your skins stay for when you switch back",
+    "standard            = " + (standard ? "true" : "false"),
     "active-skin         = \"" + slugify(activeSkinId) + "\"",
     "follow-theme        = " + (followTheme ? "true" : "false"),
     "autohide-delay      = " + p.autohideDelay,
@@ -696,6 +713,7 @@ if (typeof module !== "undefined") {
     normalizeSkin: normalizeSkin,
     builtinSkins: builtinSkins,
     defaultSkin: defaultSkin,
+    standardSkin: standardSkin,
     parseToml: parseToml,
     parseTomlSections: parseTomlSections,
     serializeToml: serializeToml,

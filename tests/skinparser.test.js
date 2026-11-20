@@ -154,4 +154,15 @@ test("built-in skins promise no motion", () => {
   for (const s of P.builtinSkins()) assert.ok(!/rotat|live|animat/i.test(s.name + " " + s.description), s.id)
 })
 
+test("standard mode round-trips and defaults off", () => {
+  assert.strictEqual(P.parseStateToml("[barcraft]\nactive-skin = \"islands\"\n").standard, false)
+  const st = P.parseStateToml(P.serializeStateToml("islands", false, null, null, null, true))
+  assert.strictEqual(st.standard, true)
+  assert.strictEqual(st.activeSkinId, "islands")
+  const s = P.standardSkin()
+  assert.strictEqual(s.mode, "edge")
+  assert.strictEqual(s.border, "none")
+  assert.strictEqual(s.radius + s.edgeMargin + s.sideMargin, 0)
+})
+
 console.log("SkinParser: " + passed + " tests passed")

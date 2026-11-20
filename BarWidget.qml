@@ -18,8 +18,9 @@ BarWidget {
   property bool panelOpen: false
   property bool popoutSwitchClosing: false
   property var bridgedEngine: Bridge.engine()
-  // The Barcraft bar's engine. Only a widget placed on another bar plugin
-  // builds one of its own.
+  // The Barcraft bar's engine. Omarchy loads a bar plugin's widget only while
+  // that bar is active, so this is the bar's engine; the local one only
+  // bridges a moment where the bar reloads under the widget.
   readonly property var skinEngine: bridgedEngine ? bridgedEngine : localEngineLoader.item
 
   Loader {
@@ -91,7 +92,9 @@ BarWidget {
     fixedHeight: root.vertical ? Style.bar.iconSlot : -1
     tooltipText: {
       var eng = root.skinEngine
-      var name = eng && eng.committedSkin ? eng.committedSkin.name : ""
+      if (!eng) return barcraftStrings.t("tooltip").arg("")
+      eng.revision
+      var name = eng.standard ? barcraftStrings.t("label.standard") : (eng.committedSkin ? eng.committedSkin.name : "")
       return barcraftStrings.t("tooltip").arg(name)
     }
     onPressed: function(mouseButton) {

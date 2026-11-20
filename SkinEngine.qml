@@ -30,6 +30,9 @@ Item {
 
   property string activeSkinId: "floating"
   property bool followTheme: true
+  // Omarchy standard: show Omarchy's own bar look on every screen. Skins,
+  // per-monitor choices and drafts stay put for when it goes off again.
+  property bool standard: false
   readonly property var builtinSkins: SkinParser.builtinSkins()
   readonly property var classicSkins: builtinSkins.filter(function(s) { return s.category !== "wild" })
   readonly property var wildSkins: builtinSkins.filter(function(s) { return s.category === "wild" })
@@ -70,11 +73,20 @@ Item {
   }
   readonly property var activeSkin: (previewSkin && previewScreen === "") ? previewSkin : committedSkin
 
+  // Standard holds unless a preview runs for that screen, so hovering a card
+  // still shows the skin it would bring back.
+  readonly property bool standardActive: standard && !(previewSkin && previewScreen === "")
+  function standardFor(screenName) {
+    if (!standard) return false
+    return !(previewSkin && (previewScreen === "" || previewScreen === String(screenName || "")))
+  }
+
   SkinLook {
     id: mainLook
     skin: engine.activeSkin
     paletteMap: engine.themeColors
     barGlassy: engine.barGlassy
+    standard: engine.standardActive
   }
   readonly property var look: mainLook
 
@@ -172,8 +184,10 @@ Item {
   // What windows make room for, from committed skins only, so hovering a
   // preview never makes every tiled window jump.
   function zoneFor(screenName) {
+    if (standard) return { standard: true, height: 0, edgeMargin: 0, autoHide: false }
     var own = monitorSkinFor(screenName) || committedSkin
     return {
+      standard: false,
       height: committedSkin ? committedSkin.height : 30,
       edgeMargin: own.mode === "edge" ? 0 : own.edgeMargin,
       autoHide: own.visibility === "autohide"
@@ -182,6 +196,7 @@ Item {
 
   // The id the Studio marks as chosen for a screen ("" = the main skin).
   function chosenIdFor(screenName) {
+    if (standard) return "standard"
     if (screenName) {
       var id = monitorSkins ? monitorSkins[screenName] : undefined
       return id ? String(id) : ""
@@ -204,7 +219,18 @@ Item {
     previewScreen = ""
   }
 
+  function setStandard(enabled) {
+    clearPreview()
+    standard = !!enabled
+    revision++
+    persistState()
+  }
+
   function selectSkin(id) {
+    if (id === "standard") {
+      setStandard(true)
+      return
+    }
     if (id === "theme") {
       setFollowTheme(true)
       return
@@ -212,6 +238,7 @@ Item {
     var found = findSkinById(id)
     if (!found) return
     clearPreview()
+    standard = false
     activeSkinId = found.id
     hasCustomDraft = false
     customSkin = SkinParser.normalizeSkin(found, found.id, found.source)
@@ -232,6 +259,7 @@ Item {
     if (!id) delete next[name]
     else next[name] = id === "theme" ? "theme" : String(id)
     clearPreview()
+    if (id) standard = false
     monitorSkins = next
     revision++
     persistState()
@@ -240,6 +268,7 @@ Item {
   function setFollowTheme(enabled) {
     clearPreview()
     followTheme = !!enabled
+    if (followTheme && themeSkin) standard = false
     if (followTheme && themeSkin) hasCustomDraft = false
     revision++
     persistState()
@@ -248,15 +277,21 @@ Item {
   // Right-click on the widget: the theme's skin, the classic presets and the
   // saved skins, in a ring. Returns the name now on.
   function cycleSkin() {
-    var ring = []
+    var ring = ["standard"]
     if (themeSkin) ring.push("theme")
     for (var i = 0; i < classicSkins.length; i++) ring.push(classicSkins[i].id)
     for (var j = 0; j < userSkins.length; j++) ring.push(userSkins[j].id)
     if (ring.length === 0) return ""
-    var current = usingThemeSkin ? "theme" : activeSkinId
+    var current = standard ? "standard" : (usingThemeSkin ? "theme" : activeSkinId)
     var idx = ring.indexOf(current)
     var next = ring[(idx + 1) % ring.length]
     selectSkin(next)
+    return currentName()
+  }
+
+  // What the bar wears now, for the widget's tooltip and the IPC.
+  function currentName() {
+    if (standardActive) return mainLook.standardSkin.name
     return activeSkin ? activeSkin.name : ""
   }
 
@@ -264,6 +299,7 @@ Item {
 
   function updateField(key, value) {
     clearPreview()
+    standard = false
     var base = committedSkin
     var next = SkinParser.normalizeSkin(base, base.id, base.source)
     next[key] = value
@@ -296,11 +332,12 @@ Item {
     Qt.callLater(engine.syncBlur)
   }
 
-  readonly property bool committedBlur: !!(committedSkin && committedSkin.blur)
+  // Standard leaves blur to Omarchy's own background setting.
+  readonly property bool committedBlur: !standard && !!(committedSkin && committedSkin.blur)
   onCommittedBlurChanged: if (isPrimary && settled) Qt.callLater(engine.syncBlur)
 
   function syncBlur() {
-    if (!isPrimary) return
+    if (!isPrimary || standard) return
     var want = committedBlur
     if (want === barGlassy) return
     // A clear bar the user picked stays clear; only asking for blur changes it.
@@ -318,6 +355,7 @@ Item {
 
   function resetToPreset() {
     clearPreview()
+    standard = false
     hasCustomDraft = false
     var found = findSkinById(activeSkinId)
     customSkin = SkinParser.normalizeSkin(found || SkinParser.defaultSkin(), activeSkinId, "builtin")
@@ -381,6 +419,7 @@ Item {
     })
     replaceUserSkin(slug, toSave)
     clearPreview()
+    standard = false
     activeSkinId = slug
     hasCustomDraft = false
     customSkin = toSave
@@ -474,6 +513,7 @@ Item {
       return
     }
     clearPreview()
+    standard = false
     customSkin = skin
     hasCustomDraft = true
     revision++
@@ -487,7 +527,7 @@ Item {
 
   function persistState() {
     persistDebounce.stop()
-    var content = SkinParser.serializeStateToml(activeSkinId, followTheme, hasCustomDraft ? customSkin : null, prefs, monitorSkins)
+    var content = SkinParser.serializeStateToml(activeSkinId, followTheme, hasCustomDraft ? customSkin : null, prefs, monitorSkins, standard)
     if (content === _lastStateText) return
     _lastStateText = content
     stateFileView.setText(content)
@@ -497,6 +537,7 @@ Item {
     var st = SkinParser.parseStateToml(raw)
     activeSkinId = st.activeSkinId
     followTheme = st.followTheme
+    standard = st.standard
     prefs = st.prefs
     monitorSkins = st.monitors
     var draft = SkinParser.parseToml(raw, st.activeSkinId, "custom", function(id) { return engine.findSkinById(id) })
@@ -628,7 +669,7 @@ Item {
 
   // ---- Icon size: Omarchy's [bar] icon tokens in ~/.config/omarchy/shell.toml
 
-  readonly property real committedIconScale: committedSkin ? Number(committedSkin.iconScale || 1) : 1
+  readonly property real committedIconScale: standard ? 1 : (committedSkin ? Number(committedSkin.iconScale || 1) : 1)
   onCommittedIconScaleChanged: if (isPrimary && settled) iconScaleDebounce.restart()
 
   Timer {

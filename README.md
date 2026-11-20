@@ -8,6 +8,7 @@ Barcraft (`thepixelgardener.barcraft`) is Omarchy's own bar with a skin engine o
 
 ## Highlights
 
+- **Omarchy standard switch.** One switch at the top of the Studio shows the bar exactly as Omarchy ships it: Omarchy's own size tokens, bar colors and Glassy setting, measured pixel-identical to `omarchy.bar`. Your skins, drafts and per-monitor choices stay; pick any skin to switch back. Unlike `omarchy bar use omarchy.bar`, the Barcraft pill and Studio stay on the bar, since Omarchy only loads a bar plugin's widget while that bar is active.
 - **8 built-in skins.** Classic: `Floating`, `Islands`, `Frosted`, `Capsule`, `Editorial`. Wild Craft (illustrated art): `Barber Pole`, `Runeforge`, `Long Rocket`.
 - **Barcraft Studio.** Click the Barcraft pill in the bar. Hover a skin (or move the keyboard cursor onto it) to preview it on the bar, click to keep it. Craft every field live, save skins, rename and delete them, copy a skin as TOML or paste one someone shared.
 - **Keyboard first.** The Studio is a keyboard panel: arrows or `hjkl` move, `←`/`→` adjust, `Return`/`Space` activate, `1`/`2` switch tabs, `R` renames and `Del` deletes a saved skin, `Esc` closes, `Tab` moves to the next panel.
@@ -36,6 +37,8 @@ omarchy-shell barcraft toggleAutoHide
 omarchy-shell barcraft next                            # next skin, prints its name
 omarchy-shell barcraft setSkin islands
 omarchy-shell barcraft followTheme
+omarchy-shell barcraft toggleStandard                  # Omarchy's own bar look on/off
+omarchy-shell barcraft setSkin standard                # the same, as a skin id
 ```
 
 For example, in `~/.config/hypr/bindings.conf`:
@@ -106,7 +109,7 @@ Skins from earlier Barcraft versions load unchanged: `art = "warcraft"` becomes 
 
 ## Files Barcraft writes
 
-- `~/.config/omarchy/barcraft.toml`: the chosen skin, per-monitor skins (`[barcraft-monitors]`), preferences that hold for every skin (auto-hide delay and mode, peek on workspace switch), and an unsaved draft.
+- `~/.config/omarchy/barcraft.toml`: the Omarchy standard switch, the chosen skin, per-monitor skins (`[barcraft-monitors]`), preferences that hold for every skin (auto-hide delay and mode, peek on workspace switch), and an unsaved draft.
 - `~/.config/omarchy/bar-skins/*.toml`: saved skins.
 - `~/.config/omarchy/shell.toml`: only when a skin's icon size isn't 100%. Barcraft adds `[bar]` icon tokens marked `# barcraft`, never touches a token you set by hand, and removes its lines again at 100%.
 - Blur runs `omarchy-bar background glassy|opaque`, the same switch as Omarchy's own menu. A clear bar you picked stays clear.

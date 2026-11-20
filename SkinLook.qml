@@ -18,8 +18,11 @@ QtObject {
   // foreground for every monitor) sets this and passes it in.
   property bool useSharedForeground: false
   property color sharedForeground: Commons.Color.bar.text
+  // Omarchy standard: the stock bar's look, whatever skin is chosen.
+  property bool standard: false
 
-  readonly property var s: skin || SkinParser.defaultSkin()
+  readonly property var standardSkin: SkinParser.standardSkin()
+  readonly property var s: standard ? standardSkin : (skin || SkinParser.defaultSkin())
 
   function num(v, fallback) {
     if (v === undefined || v === null || v === "") return fallback
@@ -130,6 +133,11 @@ QtObject {
   }
 
   readonly property color surfaceColor: {
+    // Exactly the stock bar: its theme color and alpha, or the Glassy cap.
+    if (standard) {
+      var bg = Commons.Color.bar.background
+      return Qt.rgba(bg.r, bg.g, bg.b, barGlassy ? Math.min(bg.a, 0.35) : bg.a)
+    }
     var raw = customBackgroundHex !== "" ? Qt.color(customBackgroundHex) : Commons.Color.bar.background
     var adj = adjustColorContrast(raw, surfaceTone, false)
     return Qt.rgba(adj.r, adj.g, adj.b, effectiveAlpha)
@@ -168,7 +176,7 @@ QtObject {
     return adjustColorContrast(baseFg, contrast, true)
   }
 
-  readonly property color effectiveForeground: useSharedForeground ? sharedForeground : ownForeground
+  readonly property color effectiveForeground: useSharedForeground ? sharedForeground : (standard ? Commons.Color.bar.text : ownForeground)
 
   readonly property var surfaceBorderSpec: {
     if (borderWidth <= 0 || borderRole === "none") return Border.none()

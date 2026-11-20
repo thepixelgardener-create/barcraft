@@ -717,6 +717,8 @@ Item {
     function next(): string { return skin.cycleSkin() }
     function setSkin(id: string): void { skin.selectSkin(id) }
     function followTheme(): void { skin.setFollowTheme(true) }
+    // Omarchy's own bar look on or off; skins stay for when it goes off.
+    function toggleStandard(): void { skin.setStandard(!skin.standard) }
   }
 
   // Whether a workspace holds any window, for auto-hide's "only with windows".
@@ -733,7 +735,9 @@ Item {
   function barSizeForHeight(height) {
     return vertical ? Math.max(Style.bar.sizeVertical, Style.space(height)) : Style.space(height)
   }
-  readonly property int barSize: barSizeForHeight(skin.skinHeight)
+  // Omarchy standard: the stock bar's own size tokens.
+  readonly property int stockBarSize: vertical ? Style.bar.sizeVertical : Style.bar.sizeHorizontal
+  readonly property int barSize: skin.standardActive ? stockBarSize : barSizeForHeight(skin.skinHeight)
 
   // Display cutouts (a camera notch) the platform's own package describes in
   // the fixed platform root, which no environment variable moves. Most machines
@@ -1727,6 +1731,7 @@ Item {
       barGlassy: root.glassy
       useSharedForeground: true
       sharedForeground: root.barcraft.effectiveForeground
+      standard: root.barcraft.standardFor(barWindow.screen ? barWindow.screen.name : "")
     }
     readonly property var barLook: pskin
     // What windows make room for comes from the committed skin, so hovering a
@@ -1778,7 +1783,9 @@ Item {
     // An explicit zone instead of Auto: the reserved area stays the strip's
     // thickness + floating edge gap, or 0 while auto-hide is on.
     exclusionMode: (root.barHidden || zone.autoHide) ? ExclusionMode.Ignore : ExclusionMode.Normal
-    exclusiveZone: root.thicknessForSize(screen, root.barSizeForHeight(zone.height)) + Style.space(zone.edgeMargin)
+    exclusiveZone: zone.standard
+      ? root.thicknessForSize(screen, root.stockBarSize)
+      : root.thicknessForSize(screen, root.barSizeForHeight(zone.height)) + Style.space(zone.edgeMargin)
 
     // While this window's widget or bar-move drag is live, the whole surface
     // takes input (mask below), so the pointer never leaves the bar surface
@@ -1943,9 +1950,16 @@ Item {
         }
       }
 
+      // Omarchy standard: the stock bar's own strip, drawn the way it draws it.
+      Rectangle {
+        visible: pskin.standard
+        anchors.fill: parent
+        color: root.transparent ? "transparent" : pskin.surfaceColor
+      }
+
       // Single surface for Edge and Floating (Wild Craft art draws its own).
       SkinSurface {
-        visible: !barWindow.isIslandMode && !pskin.hasArt
+        visible: !pskin.standard && !barWindow.isIslandMode && !pskin.hasArt
         anchors.fill: parent
         look: pskin
       }

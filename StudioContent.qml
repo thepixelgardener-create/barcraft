@@ -325,6 +325,7 @@ Column {
       if (!root.engine) return ""
       root.engine.revision
       if (root.engine.previewing) return root.tr("meta.preview").arg(root.engine.previewSkin.name)
+      if (root.engine.standard) return root.tr("meta.standard", "Omarchy standard")
       var name = root.engine.committedSkin.name
       if (root.engine.usingThemeSkin) return root.tr("meta.theme").arg(name)
       if (root.engine.hasCustomDraft) return root.tr("meta.custom").arg(name)
@@ -397,6 +398,21 @@ Column {
         width: parent.width
         spacing: Style.spacing.panelGap
         visible: root.activeTab === "presets" && !!root.engine
+
+        // The way back to Omarchy's own bar, kept at the top so it's never
+        // more than a keypress away. Picking any skin turns it off again.
+        ToggleRow {
+          navKey: "standard"
+          label: root.tr("label.standard", "Omarchy standard")
+          hint: root.tr("label.standardHint", "")
+          checked: root.engine ? root.engine.standard : false
+          onToggled: if (root.engine) root.engine.setStandard(!root.engine.standard)
+        }
+
+        PanelSeparator {
+          width: parent.width
+          foreground: root.fg
+        }
 
         // Per-screen skins, when there is more than one screen.
         Column {
@@ -587,6 +603,13 @@ Column {
         width: parent.width
         spacing: Style.spacing.panelGap
         visible: root.activeTab === "craft" && !!root.engine
+
+        HintText {
+          width: parent.width
+          visible: !!root.engine && root.engine.standard
+          color: Commons.Color.accent
+          text: root.tr("hint.standardCraft", "")
+        }
 
         Section {
           separated: false

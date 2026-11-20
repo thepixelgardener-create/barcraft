@@ -110,5 +110,9 @@
   "skin.editorial": "Scharfe 0px-Ecken mit klarer 1px-Akzentlinie",
   "skin.barber": "3D-Barbierstab mit Chromkappen",
   "skin.runeforge": "Geschmiedeter Obsidian, antikes Gold und leuchtende Runen",
-  "skin.rocket": "Raumschiff über die volle Breite mit Triebwerk und Spitze"
+  "skin.rocket": "Raumschiff über die volle Breite mit Triebwerk und Spitze",
+  "meta.standard": "Omarchy-Standard",
+  "label.standard": "Omarchy-Standard",
+  "label.standardHint": "Zeigt die Leiste genau so, wie Omarchy sie ausliefert. Deine Skins bleiben; wähle einen, um zurückzuwechseln.",
+  "hint.standardCraft": "Omarchy-Standard ist an. Jede Änderung hier wechselt zurück zu deinem Skin."
 }

@@ -110,5 +110,9 @@
   "skin.editorial": "Sharp 0px corners with a crisp 1px accent rule",
   "skin.barber": "3D barber pole cylinder with chrome caps",
   "skin.runeforge": "Forged obsidian stone, antique gold & glowing runes",
-  "skin.rocket": "Full-width spacecraft with thruster & nosecone"
+  "skin.rocket": "Full-width spacecraft with thruster & nosecone",
+  "meta.standard": "Omarchy standard",
+  "label.standard": "Omarchy standard",
+  "label.standardHint": "Shows the bar exactly as Omarchy ships it. Your skins stay; pick one to switch back.",
+  "hint.standardCraft": "Omarchy standard is on. Changing anything here switches back to your skin."
 }
