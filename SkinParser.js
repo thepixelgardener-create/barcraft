@@ -6,7 +6,7 @@
 // No QML imports, so the regression tests in tests/ run it under node.
 
 var VALID_MODES = ["edge", "floating", "islands"]
-var VALID_ARTS = ["none", "barber", "runeforge", "rocket"]
+var VALID_ARTS = ["none", "matrix", "runeforge"]
 var VALID_BEZELS = ["none", "raised", "inset", "ridge", "glass"]
 var VALID_BORDERS = ["none", "subtle", "accent", "hyprland"]
 var VALID_VISIBILITY = ["always", "autohide"]
@@ -14,10 +14,26 @@ var VALID_WIDGET_STYLES = ["plain", "pills", "chips"]
 var VALID_FILLS = ["solid", "gradient"]
 var VALID_AUTOHIDE_WHEN = ["always", "windows"]
 
+function dict(entries) {
+  var o = Object.create(null)
+  for (var k in entries) {
+    if (Object.prototype.hasOwnProperty.call(entries, k)) o[k] = entries[k]
+  }
+  return o
+}
+
+function hasOwn(obj, key) {
+  return !!obj && Object.prototype.hasOwnProperty.call(obj, key)
+}
+
+function isUnsafeKey(key) {
+  return key === "__proto__" || key === "constructor" || key === "prototype"
+}
+
 // Older names that still load.
-var ART_ALIASES = { warcraft: "runeforge" }
-var SKIN_ID_ALIASES = { warcraft: "runeforge" }
-var COLOR_REF_ALIASES = { accent: "theme.accent", foreground: "theme.foreground", background: "theme.background" }
+var ART_ALIASES = dict({ warcraft: "runeforge" })
+var SKIN_ID_ALIASES = dict({ warcraft: "runeforge" })
+var COLOR_REF_ALIASES = dict({ accent: "theme.accent", foreground: "theme.foreground", background: "theme.background" })
 
 // Omarchy's own bar icon tokens ([bar] in shell.toml) and their defaults,
 // which the skin's icon-scale multiplies.
@@ -40,9 +56,40 @@ function normalizeHex(raw) {
 function normalizeColorRef(raw) {
   var s = String(raw || "").trim().toLowerCase()
   if (/^#[0-9a-f]{6}$/.test(s)) return s
-  if (COLOR_REF_ALIASES[s]) return COLOR_REF_ALIASES[s]
+  if (hasOwn(COLOR_REF_ALIASES, s)) return COLOR_REF_ALIASES[s]
   if (/^theme\.[a-z][a-z0-9_]{0,31}$/.test(s)) return s
   return ""
+}
+
+function normalizeBackground(raw) {
+  var s = String(raw || "").trim().toLowerCase()
+  if (s === "bar.background") return "bar.background"
+  var ref = normalizeColorRef(s)
+  return ref || "bar.background"
+}
+
+// Neutralizes markup-shaped text before passing dynamic strings into shared
+// Omarchy-owned sinks (tooltips, OSD) whose Text format this plugin doesn't own.
+function neutralizeMarkup(text) {
+  return String(text === undefined || text === null ? "" : text).replace(/</g, "<\u200b")
+}
+
+// Verifies a skin file path sits directly inside one of the allowed skin
+// directories with a safe `.toml` filename and no traversal segments.
+function isSafeSkinPath(filePath, allowedDirs) {
+  var p = String(filePath || "")
+  if (!p || p.indexOf("\0") >= 0) return false
+  var dirs = Array.isArray(allowedDirs) ? allowedDirs : []
+  for (var i = 0; i < dirs.length; i++) {
+    var dir = String(dirs[i] || "").replace(/\/+$/, "")
+    if (!dir) continue
+    var prefix = dir + "/"
+    if (p.indexOf(prefix) !== 0) continue
+    var name = p.slice(prefix.length)
+    if (name.indexOf("/") >= 0 || name === ".." || name === ".") continue
+    if (/^[a-z0-9][a-z0-9_-]{0,63}\.toml$/i.test(name)) return true
+  }
+  return false
 }
 
 function isThemeRef(ref) {
@@ -134,21 +181,17 @@ function builtinSkins() {
       border: "accent", borderAlpha: 0.65
     }),
     preset({
-      id: "barber", name: "Barber Pole", category: "wild", art: "barber",
-      description: "3D barber pole cylinder with chrome caps",
-      height: 32, edgeMargin: 6, sideMargin: 12, innerPadding: 12, radius: 16, backgroundAlpha: 0.96,
+      id: "matrix", name: "Matrix", category: "wild", art: "matrix",
+      description: "CRT phosphor terminal with digital rain & corner brackets",
+      height: 30, edgeMargin: 6, sideMargin: 10, innerPadding: 12, radius: 2,
+      backgroundAlpha: 0.98, customForeground: "#7dffb0",
       border: "none", borderAlpha: 0.0, borderWidth: 0
     }),
     preset({
       id: "runeforge", name: "Runeforge", category: "wild", art: "runeforge",
-      description: "Forged obsidian stone, antique gold & glowing runes",
-      height: 34, edgeMargin: 5, sideMargin: 10, innerPadding: 14, radius: 4, backgroundAlpha: 0.98,
-      border: "none", borderAlpha: 0.0, borderWidth: 0
-    }),
-    preset({
-      id: "rocket", name: "Long Rocket", category: "wild", art: "rocket",
-      description: "Full-width spacecraft with thruster & nosecone",
-      height: 34, edgeMargin: 6, sideMargin: 8, innerPadding: 12, radius: 0, backgroundAlpha: 0.96,
+      description: "Chamfered obsidian basalt & hairline etched antique brass",
+      height: 32, edgeMargin: 6, sideMargin: 10, innerPadding: 14, radius: 0,
+      backgroundAlpha: 0.98,
       border: "none", borderAlpha: 0.0, borderWidth: 0
     })
   ]
@@ -197,7 +240,7 @@ function slugify(text) {
 
 function canonicalSkinId(id) {
   var s = slugify(id)
-  return SKIN_ID_ALIASES[s] || s
+  return hasOwn(SKIN_ID_ALIASES, s) ? SKIN_ID_ALIASES[s] : s
 }
 
 function sanitizeLabel(text, maxLen) {
@@ -234,7 +277,7 @@ function normalizeSkin(raw, fallbackId, source) {
   if (VALID_MODES.indexOf(mode) === -1) mode = base.mode
 
   var art = String(obj.art || base.art).trim().toLowerCase()
-  art = ART_ALIASES[art] || art
+  art = hasOwn(ART_ALIASES, art) ? ART_ALIASES[art] : art
   if (VALID_ARTS.indexOf(art) === -1) art = "none"
 
   var border = String(obj.border || base.border).trim().toLowerCase()
@@ -273,7 +316,7 @@ function normalizeSkin(raw, fallbackId, source) {
     innerPadding: Math.round(clamp(obj.innerPadding, 4, 24, base.innerPadding)),
     radius: autoOr(obj.radius, 0, 28, base.radius, true),
     iconScale: round2(clamp(obj.iconScale, 0.8, 1.5, base.iconScale)),
-    background: String(obj.background || base.background).trim() || "bar.background",
+    background: normalizeBackground(obj.background),
     backgroundAlpha: autoOr(obj.backgroundAlpha, 0, 1, base.backgroundAlpha, false),
     fill: oneOf(obj.fill || base.fill, VALID_FILLS, base.fill),
     gradientTo: normalizeColorRef(obj.gradientTo),
@@ -344,24 +387,36 @@ function parseTomlValue(rest) {
 }
 
 // { "<section>": { key: "raw value" } }, top-level keys under "".
+// Uses null-prototype maps and drops prototype-chain keys to prevent
+// Object.prototype pollution from untrusted TOML input.
 function parseTomlSections(text) {
-  var out = { "": {} }
+  var out = Object.create(null)
+  out[""] = Object.create(null)
   var section = ""
+  var ignoreSection = false
   var lines = String(text || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim()
     if (!line || line.charAt(0) === "#") continue
     var sec = line.match(/^\[([A-Za-z0-9_.-]+)\]\s*(#.*)?$/)
     if (sec) {
+      if (isUnsafeKey(sec[1])) {
+        ignoreSection = true
+        continue
+      }
+      ignoreSection = false
       section = sec[1]
-      if (!out[section]) out[section] = {}
+      if (!out[section]) out[section] = Object.create(null)
       continue
     }
+    if (ignoreSection) continue
     var kv = line.match(/^(?:"([^"\\]{1,64})"|([A-Za-z0-9_-]{1,64}))\s*=\s*(.*)$/)
     if (!kv) continue
+    var key = kv[1] !== undefined ? kv[1] : kv[2]
+    if (isUnsafeKey(key)) continue
     var value = parseTomlValue(kv[3])
     if (value === null) continue
-    out[section][kv[1] !== undefined ? kv[1] : kv[2]] = value
+    out[section][key] = value
   }
   return out
 }
@@ -370,11 +425,12 @@ function tomlString(text) {
   return "\"" + String(text || "")
     .replace(/\\/g, "\\\\")
     .replace(/"/g, "\\\"")
+    .replace(/\r/g, "\\r")
     .replace(/\n/g, "\\n")
     .replace(/\t/g, "\\t") + "\""
 }
 
-var KEY_MAP = {
+var KEY_MAP = dict({
   "id": "id",
   "name": "name",
   "description": "description",
@@ -411,11 +467,13 @@ var KEY_MAP = {
   "visibility": "visibility",
   "hover-edge-px": "hoverEdgePx",
   "accent-hairline": "accentHairline"
-}
+})
 
 function copySkin(skin) {
   var out = {}
-  for (var k in skin) out[k] = skin[k]
+  for (var k in skin) {
+    if (hasOwn(skin, k) && !isUnsafeKey(k)) out[k] = skin[k]
+  }
   return out
 }
 
@@ -427,7 +485,8 @@ function skinFromKvMap(map, fallbackId, source, lookup) {
   var merged = base ? copySkin(base) : {}
   var named = false
   for (var key in map) {
-    var field = KEY_MAP[key]
+    if (!hasOwn(map, key) || isUnsafeKey(key)) continue
+    var field = hasOwn(KEY_MAP, key) ? KEY_MAP[key] : ""
     if (!field) continue
     if (key === "inner-padding" && map["inner-padding-x"] !== undefined) continue
     merged[field] = map[key]
@@ -442,26 +501,30 @@ function parseToml(text, fallbackId, source, lookup) {
   var raw = String(text || "")
   if (!raw.trim()) return null
   var sections = parseTomlSections(raw)
-  var map = {}
+  var map = Object.create(null)
   var found = false
-  var top = sections[""] || {}
-  var skinSec = sections["bar-skin"] || {}
+  var top = sections[""] || Object.create(null)
+  var skinSec = sections["bar-skin"] || Object.create(null)
   var k
-  for (k in top) { if (KEY_MAP[k] || k === "preset") { map[k] = top[k]; found = true } }
-  for (k in skinSec) { map[k] = skinSec[k]; found = true }
+  for (k in top) { if (hasOwn(KEY_MAP, k) || k === "preset") { map[k] = top[k]; found = true } }
+  for (k in skinSec) { if (!isUnsafeKey(k)) { map[k] = skinSec[k]; found = true } }
   if (!found) return null
   return skinFromKvMap(map, fallbackId, source, lookup)
 }
 
 function parseFromShellValues(shellValues, lookup) {
   if (!shellValues || typeof shellValues !== "object") return null
-  var map = {}
+  var map = Object.create(null)
   var found = false
   var prefix = "bar-skin."
   for (var k in shellValues) {
+    if (!hasOwn(shellValues, k)) continue
     if (k.indexOf(prefix) === 0) {
-      map[k.slice(prefix.length)] = shellValues[k]
-      found = true
+      var sub = k.slice(prefix.length)
+      if (!isUnsafeKey(sub)) {
+        map[sub] = shellValues[k]
+        found = true
+      }
     }
   }
   if (!found) return null
@@ -505,7 +568,7 @@ function serializeToml(skin) {
     "icon-scale       = " + s.iconScale.toFixed(2),
     "",
     "# Surface & Border",
-    "background       = \"" + s.background + "\"",
+    "background       = " + tomlString(s.background),
     "background-alpha = " + tomlNumberOrAuto(s.backgroundAlpha, true),
     "fill             = \"" + s.fill + "\"",
     s.gradientTo ? "gradient-to      = \"" + s.gradientTo + "\"" : null,
@@ -554,6 +617,7 @@ function normalizePrefs(raw) {
 
 function sanitizeScreenName(name) {
   var s = String(name || "").trim()
+  if (isUnsafeKey(s)) return ""
   return /^[A-Za-z0-9_.:-]{1,48}$/.test(s) ? s : ""
 }
 
@@ -620,15 +684,17 @@ function parseThemeColorsToml(text) {
   var raw = String(text || "")
   if (!raw.trim()) return []
 
-  var map = {}
+  var map = Object.create(null)
   var lines = raw.split("\n")
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i].trim()
     if (!line || line.charAt(0) === "#" || line.charAt(0) === "[") continue
     var m = line.match(/^([A-Za-z0-9_-]+)\s*=\s*["'](#?[0-9a-fA-F]{6})["']/)
     if (!m) continue
+    var key = m[1].toLowerCase()
+    if (isUnsafeKey(key)) continue
     var hex = m[2].charAt(0) === "#" ? m[2].toLowerCase() : ("#" + m[2].toLowerCase())
-    map[m[1].toLowerCase()] = hex
+    map[key] = hex
   }
 
   var order = [
@@ -639,7 +705,7 @@ function parseThemeColorsToml(text) {
   ]
 
   var out = []
-  var seen = {}
+  var seen = Object.create(null)
   for (var j = 0; j < order.length; j++) {
     var key = order[j]
     var val = map[key]
@@ -653,12 +719,14 @@ function parseThemeColorsToml(text) {
 // key -> "#rrggbb" for every color the theme defines, duplicates included,
 // so a "theme.<key>" reference resolves even when its hex repeats another.
 function themeColorMap(text) {
-  var map = {}
+  var map = Object.create(null)
   var lines = String(text || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
     var m = lines[i].trim().match(/^([A-Za-z0-9_-]+)\s*=\s*["'](#?[0-9a-fA-F]{6})["']/)
     if (!m) continue
-    map[m[1].toLowerCase()] = (m[2].charAt(0) === "#" ? m[2] : "#" + m[2]).toLowerCase()
+    var key = m[1].toLowerCase()
+    if (isUnsafeKey(key)) continue
+    map[key] = (m[2].charAt(0) === "#" ? m[2] : "#" + m[2]).toLowerCase()
   }
   return map
 }
@@ -808,7 +876,9 @@ function stateFromJson(obj, lookup) {
     var base = null
     if (o.draft.preset !== undefined && typeof lookup === "function") base = lookup(String(o.draft.preset))
     var merged = base ? copySkin(base) : {}
-    for (var k in o.draft) merged[k] = o.draft[k]
+    for (var k in o.draft) {
+      if (hasOwn(o.draft, k) && !isUnsafeKey(k)) merged[k] = o.draft[k]
+    }
     state.draft = normalizeSkin(merged, state.activeSkinId, "custom")
   }
   return state
@@ -864,10 +934,20 @@ function applyMenuBlock(text, entries) {
   var inside = false
   for (var i = 0; i < lines.length; i++) {
     var t = lines[i].trim()
-    if (t.indexOf(MENU_BEGIN) === 0) { inside = true; continue }
-    if (t.indexOf(MENU_END) === 0) { inside = false; continue }
+    if (t.indexOf(MENU_BEGIN) === 0) {
+      if (inside) return src // nested/malformed markers: leave the file untouched
+      inside = true
+      continue
+    }
+    if (t.indexOf(MENU_END) === 0) {
+      if (!inside) return src // stray end marker: leave the file untouched
+      inside = false
+      continue
+    }
     if (!inside) kept.push(lines[i])
   }
+  // Unclosed barcraft:begin marker: refuse to strip the rest of the file.
+  if (inside) return src
   var body = kept.join("\n")
   if (!entries || entries.length === 0) return body
   if (!body.trim()) body = "{\n}\n"
@@ -917,6 +997,8 @@ if (typeof module !== "undefined") {
     stateFromJson: stateFromJson,
     applyMenuBlock: applyMenuBlock,
     slugify: slugify,
-    sanitizeLabel: sanitizeLabel
+    sanitizeLabel: sanitizeLabel,
+    neutralizeMarkup: neutralizeMarkup,
+    isSafeSkinPath: isSafeSkinPath
   }
 }

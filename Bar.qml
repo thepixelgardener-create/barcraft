@@ -729,7 +729,7 @@ Item {
     // Changes made here show their result in Omarchy's OSD.
     function toggleAutoHide(): void { skin.toggleAutoHide(); skin.announce() }
     function next(): string { var name = skin.cycleSkin(); skin.announce(); return name }
-    function setSkin(id: string): void { skin.selectSkin(id); skin.announce() }
+    function setSkin(id: string): void { if (skin.selectSkin(id)) skin.announce() }
     function followTheme(): void { skin.setFollowTheme(true); skin.announce() }
     // Omarchy's own bar look on or off; skins stay for when it goes off.
     function toggleStandard(): void { skin.setStandard(!skin.standard); skin.announce() }

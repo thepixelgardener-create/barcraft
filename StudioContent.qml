@@ -890,9 +890,8 @@ Column {
         value: root.engine ? root.engine.art : "none"
         options: [
           { value: "none", label: root.tr("art.none", "Clean") },
-          { value: "barber", label: root.tr("art.barber", "Barber") },
-          { value: "runeforge", label: root.tr("art.runeforge", "Runeforge") },
-          { value: "rocket", label: root.tr("art.rocket", "Rocket") }
+          { value: "matrix", label: root.tr("art.matrix", "Matrix") },
+          { value: "runeforge", label: root.tr("art.runeforge", "Runeforge") }
         ]
         onPicked: function(v) { root.engine.updateField("art", v) }
       }

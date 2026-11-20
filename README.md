@@ -10,7 +10,7 @@ Barcraft (`thepixelgardener.barcraft`) is Omarchy's own bar with a skin engine o
 
 - **Omarchy standard.** The first tile in the Studio (click it again to leave) shows the bar exactly as Omarchy ships it, measured pixel-identical to `omarchy.bar`. Your skins stay; pick one to switch back. Unlike `omarchy bar use omarchy.bar`, the Barcraft pill and Studio stay on the bar, since Omarchy only loads a bar plugin's widget while that bar is active.
 - **Presets built from Omarchy's tokens.** "Auto" geometry follows the foundation: the theme's bar size (`[bar] size-horizontal`), Omarchy's panel gap to the screen edge, Hyprland's `gaps_out` at the sides so the bar lines up with your windows, Hyprland's `decoration:rounding` for corners, and the theme's bar alpha. Change your Hyprland rounding or theme and the bar follows.
-- **8 built-in skins.** Classic: `Floating`, `Islands`, `Frosted`, `Capsule`, `Editorial`. Wild Craft (illustrated, still art): `Barber Pole`, `Runeforge`, `Long Rocket`.
+- **7 built-in skins.** Classic: `Floating`, `Islands`, `Frosted`, `Capsule`, `Editorial`. Wild Craft (still art): `Matrix`, `Runeforge`.
 - **Barcraft Studio.** Click the Barcraft pill. Tabs: **Skins · Colors · Geometry · Surface · Behavior**. Hover a skin (or move the keyboard cursor onto it) to preview it on the bar, click to keep it. Edit every field live, save, rename and delete skins, copy one as TOML or paste one someone shared.
 - **Keyboard first.** The Studio is an Omarchy keyboard panel: arrows or `hjkl` move, `←`/`→` adjust, `Return` toggles a slider's Auto, `1`–`5` pick a tab, `R` renames and `Del` deletes a saved skin, `Esc` closes, `Tab` moves to the next panel.
 - **Per-monitor skins.** "Apply to" gives one screen its own skin. Height and icon color stay shared, since every widget draws with the one size and foreground the bar publishes.
@@ -35,7 +35,7 @@ Barcraft (`thepixelgardener.barcraft`) is Omarchy's own bar with a skin engine o
 ## Install
 
 ```bash
-omarchy plugin add <this repo's git url> --enable
+omarchy plugin add https://github.com/thepixelgardener-create/barcraft --enable
 omarchy bar use thepixelgardener.barcraft
 omarchy bar put thepixelgardener.barcraft --section right
 ```
@@ -85,7 +85,7 @@ name              = "Islands"
 description       = "Separate floating pills for left, center, and right"
 preset            = "islands"        # optional base: any built-in or saved skin id
 mode              = "islands"        # edge | floating | islands
-art               = "none"           # none | barber | runeforge | rocket
+art               = "none"           # none | matrix | runeforge
 theme-tint        = false            # recolor art with the theme
 bezel             = "none"           # none | raised | inset | ridge | glass
 bezel-strength    = 0.75

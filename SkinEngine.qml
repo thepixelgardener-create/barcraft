@@ -27,7 +27,10 @@ Item {
   readonly property string userShellTomlPath: configDir + "/shell.toml"
   readonly property string menuExtensionPath: configDir + "/extensions/omarchy-menu.jsonc"
   readonly property string updateHookPath: configDir + "/hooks/post-update.d/barcraft-sync"
-  readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
+  readonly property string pluginDir: {
+    var raw = String(Qt.resolvedUrl(".")).replace(/^(?:file|qs):\/\//, "").replace(/\/$/, "")
+    try { return decodeURIComponent(raw) } catch (e) { return raw }
+  }
 
   property bool isPrimary: true
   // Handed in by the bar: the shell's config facade (writes shell.json),
@@ -254,14 +257,14 @@ Item {
   function selectSkin(id) {
     if (id === "standard") {
       setStandard(true)
-      return
+      return true
     }
     if (id === "theme") {
       setFollowTheme(true)
-      return
+      return true
     }
     var found = findSkinById(id)
-    if (!found) return
+    if (!found) return false
     clearPreview()
     standard = false
     activeSkinId = found.id
@@ -270,6 +273,7 @@ Item {
     if (themeSkin) followTheme = false
     revision++
     persistState()
+    return true
   }
 
   // Gives one screen its own skin; "" hands it back to the main skin.
@@ -332,7 +336,7 @@ Item {
   // change made by keybinding, right-click or IPC, where no panel is open.
   function announce() {
     if (!isPrimary) return
-    var payload = JSON.stringify({ icon: "󰍜", message: currentName(), duration: "1100" })
+    var payload = JSON.stringify({ icon: "󰍜", message: SkinParser.neutralizeMarkup(currentName()), duration: "1100" })
     runCommand(["omarchy-shell", "-q", "osd", "show", payload])
   }
 
@@ -490,7 +494,9 @@ Item {
         engine.notice("status.saveFailed", slug, true)
         return
       }
-      if (oldPath !== renamed.path) engine.runCommand(["rm", "-f", "--", oldPath])
+      if (oldPath !== renamed.path && SkinParser.isSafeSkinPath(oldPath, [engine.userSkinsDir, engine.legacySkinsDir])) {
+        engine.runCommand(["rm", "-f", "--", oldPath])
+      }
       engine.notice("status.renamed", cleanName, false)
     })
     replaceUserSkin(id, renamed)
@@ -515,7 +521,10 @@ Item {
     }
     if (!victim) return
     clearPreview()
-    runCommand(["rm", "-f", "--", victim.path || skinPath(id)])
+    var victimPath = victim.path || skinPath(id)
+    if (SkinParser.isSafeSkinPath(victimPath, [userSkinsDir, legacySkinsDir])) {
+      runCommand(["rm", "-f", "--", victimPath])
+    }
     // The bar doesn't change under you: a deleted skin that's on stays on as
     // an unsaved draft until something else is picked.
     if (activeSkinId === id && !hasCustomDraft && !usingThemeSkin) {
@@ -543,6 +552,7 @@ Item {
   }
 
   function importFromClipboard() {
+    if (pasteProc.running) return
     pasteProc.running = true
   }
 
@@ -697,10 +707,14 @@ Item {
   }
 
   // Commands run one after another, never cancelling the one before.
+  // Queue depth and runtime are bounded so a stalled external command cannot
+  // grow the queue without limit or wedge later bar/OSD operations.
   property var _commandQueue: []
 
   function runCommand(argv) {
-    _commandQueue = _commandQueue.concat([argv])
+    var next = _commandQueue.concat([argv])
+    if (next.length > 32) next = next.slice(next.length - 32)
+    _commandQueue = next
     if (!commandProc.running) _nextCommand()
   }
 
@@ -709,11 +723,27 @@ Item {
     commandProc.command = _commandQueue[0]
     _commandQueue = _commandQueue.slice(1)
     commandProc.running = true
+    commandWatchdog.restart()
+  }
+
+  Timer {
+    id: commandWatchdog
+    interval: 8000
+    repeat: false
+    onTriggered: {
+      if (!commandProc.running) return
+      console.warn("Barcraft: command timed out, stopping: " + JSON.stringify(commandProc.command))
+      commandProc.running = false
+      Qt.callLater(engine._nextCommand)
+    }
   }
 
   Process {
     id: commandProc
-    onExited: Qt.callLater(engine._nextCommand)
+    onExited: {
+      commandWatchdog.stop()
+      Qt.callLater(engine._nextCommand)
+    }
   }
 
   function rescanUserSkins() {
@@ -769,7 +799,7 @@ Item {
   function menuEntries() {
     var parent = "appearance.top-bar.barcraft"
     var pill = "󰍜"
-    var check = function(id) { return "[[ $(omarchy-shell -q barcraft current) == " + id + " ]]" }
+    var check = function(id) { return "[[ $(omarchy-shell -q barcraft current) == " + shellQuoteSingle(id) + " ]]" }
     var rows = [
       [parent, { icon: pill, label: "Barcraft", when: "omarchy-shell barcraft ping >/dev/null 2>&1" }],
       [parent + ".studio", { icon: "󰏘", label: strings.t("menu.studio"), action: "omarchy-shell shell toggle thepixelgardener.barcraft" }],
@@ -778,13 +808,14 @@ Item {
     if (themeSkin) rows.push([parent + ".theme", { icon: "󰏘", label: strings.t("card.theme"), checked: check("theme"), action: "omarchy-shell barcraft setSkin theme" }])
     for (var i = 0; i < builtinSkins.length; i++) {
       var b = builtinSkins[i]
-      rows.push([parent + "." + b.id, { icon: b.category === "wild" ? "󰏘" : "󰍜", label: b.name, checked: check(b.id), action: "omarchy-shell barcraft setSkin " + b.id }])
+      if (!/^[a-z0-9_-]+$/.test(String(b.id || ""))) continue
+      rows.push([parent + "." + b.id, { icon: b.category === "wild" ? "󰏘" : "󰍜", label: b.name, checked: check(b.id), action: "omarchy-shell barcraft setSkin " + shellQuoteSingle(b.id) }])
     }
     return rows
   }
 
   function shellQuoteSingle(text) {
-    return "'" + String(text).replace(/'/g, "'\\''") + "'"
+    return "'" + String(text).replace(/\0/g, "").replace(/'/g, "'\\''") + "'"
   }
 
   // After an Omarchy update: has Omarchy's bar moved under Barcraft's copy?
@@ -916,12 +947,18 @@ Item {
 
   // Saved skins from both folders (the current one first, so it wins a name
   // clash), read with jq like Omarchy's own scripts: no python needed.
+  // Rejects symlinks so `stat -c %s` cannot be bypassed by a tiny symlink to a
+  // huge file, and caps the file count before buffering into jq -s.
   Process {
     id: scanProc
     command: ["sh", "-c",
-      "for d in \"$@\"; do for f in \"$d\"/*.toml; do "
-      + "[ -f \"$f\" ] && [ \"$(stat -c %s \"$f\")\" -le 32768 ] && jq -Rs --arg path \"$f\" '{path: $path, text: .}' \"$f\"; "
-      + "done; done | jq -s '.[:200]'",
+      "n=0; for d in \"$@\"; do for f in \"$d\"/*.toml; do "
+      + "[ ! -L \"$f\" ] && [ -f \"$f\" ] || continue; "
+      + "size=$(stat -c %s \"$f\" 2>/dev/null || echo 999999); "
+      + "[ \"$size\" -le 32768 ] || continue; "
+      + "jq -Rs --arg path \"$f\" '{path: $path, text: .}' \"$f\"; "
+      + "n=$((n + 1)); [ \"$n\" -ge 200 ] && break 2; "
+      + "done; done | jq -s '.'",
       "sh", engine.userSkinsDir, engine.legacySkinsDir]
     stdout: StdioCollector {
       waitForEnd: true
@@ -929,9 +966,11 @@ Item {
         try {
           var rows = JSON.parse(text || "[]")
           var parsed = []
-          var seen = {}
+          var seen = Object.create(null)
+          var allowed = [engine.userSkinsDir, engine.legacySkinsDir]
           for (var i = 0; i < rows.length; i++) {
             var file = String(rows[i].path || "")
+            if (!SkinParser.isSafeSkinPath(file, allowed)) continue
             var slug = SkinParser.slugify(file.replace(/^.*\//, "").replace(/\.toml$/, ""))
             if (seen[slug]) continue
             var skin = SkinParser.parseToml(rows[i].text, slug, "user", function(id) { return engine.findSkinById(id) })
@@ -953,7 +992,7 @@ Item {
   }
 
   // A paste into a Studio field (LineField asks rather than reading the
-  // clipboard itself): one line of text, read capped like every paste here.
+  // clipboard itself): one line of text, bounded in both bytes and time.
   property var _fieldPaste: null
 
   function pasteInto(field) {
@@ -964,7 +1003,7 @@ Item {
 
   Process {
     id: fieldPasteProc
-    command: ["sh", "-c", "wl-paste --no-newline --type text 2>/dev/null | head -c 256"]
+    command: ["sh", "-c", "timeout 2 wl-paste --no-newline --type text 2>/dev/null | head -c 256"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -978,10 +1017,10 @@ Item {
     }
   }
 
-  // Clipboard text, cut off just past the 32 KiB a skin may be.
+  // Clipboard text, bounded in time and cut off just past the 32 KiB a skin may be.
   Process {
     id: pasteProc
-    command: ["sh", "-c", "wl-paste --no-newline --type text 2>/dev/null | head -c 32769"]
+    command: ["sh", "-c", "timeout 2 wl-paste --no-newline --type text 2>/dev/null | head -c 32769"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: engine.importText(text)

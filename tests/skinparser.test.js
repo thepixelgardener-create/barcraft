@@ -140,7 +140,7 @@ test("icon overrides on a missing file", () => {
 
 test("theme colors parse with every key mapped", () => {
   const text = "accent = \"#7aa2f7\"\nblue = \"#7aa2f7\"\nbackground = '1a1b26'\n"
-  assert.deepStrictEqual(P.themeColorMap(text), { accent: "#7aa2f7", blue: "#7aa2f7", background: "#1a1b26" })
+  assert.deepStrictEqual(Object.assign({}, P.themeColorMap(text)), { accent: "#7aa2f7", blue: "#7aa2f7", background: "#1a1b26" })
   assert.strictEqual(P.parseThemeColorsToml(text).length, 2)
 })
 
@@ -186,7 +186,9 @@ test("classic presets follow Omarchy; art presets keep their own geometry", () =
     assert.strictEqual(byId[id].height, "auto", id)
   }
   assert.strictEqual(byId.capsule.radius, 16)
-  assert.strictEqual(byId.rocket.height, 34)
+  assert.strictEqual(byId.matrix.height, 30)
+  assert.strictEqual(byId.runeforge.height, 32)
+  assert.ok(!byId.rocket && !byId.barber)
 })
 
 test("width is a clamped percentage and opacity may reach zero", () => {
@@ -251,6 +253,68 @@ test("Omarchy menu block: valid JSONC in, same file out", () => {
     assert.deepStrictEqual(t.trim() ? parseJsonc(removed) : {}, t.trim() ? parseJsonc(t) : {})
   }
   assert.strictEqual(P.applyMenuBlock("not json at all", entries), "not json at all")
+})
+
+test("prototype pollution and prototype-chain keys are blocked in TOML and JSON", () => {
+  const nasty = "[__proto__]\npolluted = \"yes\"\n[constructor]\npolluted2 = \"yes\"\n[bar-skin]\nname = \"Safe\"\n__proto__ = \"bad\"\ntoString = \"bad\"\n"
+  const s = P.parseToml(nasty, "x", "user")
+  assert.strictEqual(({}).polluted, undefined)
+  assert.strictEqual(({}).polluted2, undefined)
+  assert.strictEqual(s.name, "Safe")
+
+  assert.strictEqual(P.normalizeColorRef("constructor"), "")
+  assert.strictEqual(P.normalizeColorRef("toString"), "")
+  assert.strictEqual(P.normalizeColorRef("__proto__"), "")
+  assert.strictEqual(P.canonicalSkinId("toString"), "tostring")
+  assert.strictEqual(P.canonicalSkinId("constructor"), "constructor")
+
+  const st = P.parseStateToml("[barcraft-monitors]\n__proto__ = \"floating\"\nconstructor = \"islands\"\nHDMI-A-1 = \"frosted\"\n")
+  assert.strictEqual(({}).polluted, undefined)
+  assert.deepStrictEqual(st.monitors, { "HDMI-A-1": "frosted" })
+
+  const colors = P.themeColorMap("__proto__ = \"#112233\"\nconstructor = \"#445566\"\naccent = \"#7aa2f7\"\n")
+  assert.strictEqual(Object.getPrototypeOf(colors), null)
+  assert.strictEqual(colors.accent, "#7aa2f7")
+  assert.strictEqual(colors["__proto__"], undefined)
+})
+
+test("background field rejects TOML injection and serializes safely", () => {
+  const s = P.parseToml("[bar-skin]\nname = \"Ok\"\nbackground = \"x\\\"\\n[injected]\\nevil = true\"\n", "x", "user")
+  assert.strictEqual(s.background, "bar.background")
+  const serialized = P.serializeToml(s)
+  assert.ok(!/\[injected\]/.test(serialized))
+  assert.ok(/background\s*=\s*"bar\.background"/.test(serialized))
+
+  const validRef = P.normalizeSkin({ background: "theme.blue" }, "x")
+  assert.strictEqual(validRef.background, "theme.blue")
+})
+
+test("unclosed or malformed menu markers never truncate omarchy-menu.jsonc", () => {
+  const unclosed = "{\n  \"keep\": 1,\n  // barcraft:begin\n  \"user_entry\": 2\n}\n"
+  assert.strictEqual(P.applyMenuBlock(unclosed, null), unclosed)
+  assert.strictEqual(P.applyMenuBlock(unclosed, [["a", { label: "A" }]]), unclosed)
+
+  const strayEnd = "{\n  \"keep\": 1,\n  // barcraft:end\n  \"user_entry\": 2\n}\n"
+  assert.strictEqual(P.applyMenuBlock(strayEnd, null), strayEnd)
+})
+
+test("isSafeSkinPath confines paths to allowed skin directories", () => {
+  const dirs = ["/home/u/.config/omarchy/bar/skins", "/home/u/.config/omarchy/bar-skins"]
+  assert.strictEqual(P.isSafeSkinPath("/home/u/.config/omarchy/bar/skins/my-skin.toml", dirs), true)
+  assert.strictEqual(P.isSafeSkinPath("/home/u/.config/omarchy/bar-skins/old_1.toml", dirs), true)
+  assert.strictEqual(P.isSafeSkinPath("/home/u/.config/omarchy/bar/skins/../shell.json", dirs), false)
+  assert.strictEqual(P.isSafeSkinPath("/home/u/.config/omarchy/bar/skins/sub/a.toml", dirs), false)
+  assert.strictEqual(P.isSafeSkinPath("/etc/passwd", dirs), false)
+  assert.strictEqual(P.isSafeSkinPath("/home/u/.config/omarchy/bar/skins/.hidden.toml", dirs), false)
+  assert.strictEqual(P.isSafeSkinPath("/home/u/.config/omarchy/bar/skins/evil.sh", dirs), false)
+})
+
+test("neutralizeMarkup breaks markup-shaped input for shared tooltip/OSD sinks", () => {
+  const tracker = "<img src=\"https://example.invalid/tracker\"><b>hi</b>"
+  const safe = P.neutralizeMarkup(tracker)
+  assert.ok(!/<img\b/i.test(safe))
+  assert.ok(!/<b>/i.test(safe))
+  assert.strictEqual(safe.replace(/\u200b/g, ""), tracker)
 })
 
 console.log("SkinParser: " + passed + " tests passed")

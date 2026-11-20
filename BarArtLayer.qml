@@ -2,9 +2,9 @@ import QtQuick
 import qs.Commons
 import qs.Commons as Commons
 
-// Art renderer for Wild Craft skins ("barber", "runeforge", "rocket"). Still
-// artwork: nothing here animates, so the bar never redraws on its own. Keeps
-// strong text contrast behind all hosted bar widgets.
+// Art renderer for crafted bar skins ("matrix", "runeforge"). Still artwork:
+// painted once per resize/color change, zero per-frame redraws, keeping strong
+// contrast behind every hosted bar widget.
 Item {
   id: root
 
@@ -16,527 +16,308 @@ Item {
   property bool vertical: false
   property real cornerRadius: Style.space(10)
 
-  // Extra horizontal insets needed by shaped end-caps (e.g. rocket thruster & nosecone)
-  readonly property int leftContentInset: art === "rocket" && !vertical ? Math.round(height * 1.45) : (art === "barber" && !vertical ? Math.round(height * 0.45) : (art === "runeforge" && !vertical ? Style.space(14) : 0))
-  readonly property int rightContentInset: art === "rocket" && !vertical ? Math.round(height * 1.25) : (art === "barber" && !vertical ? Math.round(height * 0.45) : (art === "runeforge" && !vertical ? Style.space(14) : 0))
+  readonly property int leftContentInset: !vertical && (art === "runeforge" || art === "matrix") ? Style.space(12) : 0
+  readonly property int rightContentInset: !vertical && (art === "runeforge" || art === "matrix") ? Style.space(12) : 0
 
   readonly property bool useTintedPalette: themeTint || customBackground !== "" || customAccent !== ""
   readonly property color bg: customBackground !== "" ? Qt.color(customBackground) : Commons.Color.bar.background
   readonly property color fg: Commons.Color.bar.text
   readonly property color acc: customAccent !== "" ? Qt.color(customAccent) : Commons.Color.accent
-  readonly property color urg: customAccent !== "" ? Qt.darker(Qt.color(customAccent), 1.45) : Commons.Color.bar.active
 
   visible: art !== "" && art !== "none"
 
   // =========================================================================
-  // 1. BARBER POLE — Diagonal helix cylinder + chrome end caps
+  // 1. MATRIX — Phosphor terminal HUD: deep CRT black, subtle glyph rain,
+  //    fine scanlines, and razor-sharp phosphor corner targeting brackets.
   // =========================================================================
-  Item {
-    id: barberRoot
-    visible: root.art === "barber"
+  Canvas {
+    id: matrixCanvas
+    visible: root.art === "matrix"
     anchors.fill: parent
+    renderStrategy: Canvas.Cooperative
 
-    readonly property int capW: Math.max(8, Math.round(height * 0.36))
-    readonly property color stripeA: root.useTintedPalette ? root.acc : "#d9363e"
-    readonly property color stripeB: root.useTintedPalette ? Qt.lighter(root.bg, 2.2) : "#eef2f7"
-    readonly property color stripeC: root.useTintedPalette ? root.urg : "#2563c9"
+    readonly property color phos: root.useTintedPalette ? root.acc : "#00ff66"
+    readonly property color crtBg: root.useTintedPalette ? Qt.darker(root.bg, 2.2) : "#050b07"
+    readonly property color crtGlow: root.useTintedPalette ? root.bg : "#0a1d11"
 
-    // Main rotating glass tube
-    Rectangle {
-      id: barberTube
-      anchors.top: parent.top
-      anchors.bottom: parent.bottom
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.leftMargin: barberRoot.capW - 2
-      anchors.rightMargin: barberRoot.capW - 2
-      radius: Math.min(height / 2, root.cornerRadius)
-      color: "#161922"
-      clip: true
+    onWidthChanged: requestPaint()
+    onHeightChanged: requestPaint()
+    onVisibleChanged: if (visible) requestPaint()
 
-      // Repeating angled stripes
-      Item {
-        id: stripeTrack
-        readonly property real pitch: Math.max(36, Math.round(barberTube.height * 1.8))
+    Connections {
+      target: root
+      function onThemeTintChanged() { matrixCanvas.requestPaint() }
+      function onCustomBackgroundChanged() { matrixCanvas.requestPaint() }
+      function onCustomAccentChanged() { matrixCanvas.requestPaint() }
+      function onContrastChanged() { matrixCanvas.requestPaint() }
+      function onCornerRadiusChanged() { matrixCanvas.requestPaint() }
+      function onVerticalChanged() { matrixCanvas.requestPaint() }
+    }
 
-        x: -pitch * 2
-        y: -barberTube.height
-        width: barberTube.width + pitch * 5
-        height: barberTube.height * 3
+    Connections {
+      target: Commons.Color
+      function onBackgroundChanged() { if (matrixCanvas.visible) matrixCanvas.requestPaint() }
+      function onAccentChanged() { if (matrixCanvas.visible) matrixCanvas.requestPaint() }
+    }
 
-        Repeater {
-          model: Math.ceil((barberTube.width + stripeTrack.pitch * 5) / stripeTrack.pitch) + 2
+    function rgba(c, a) {
+      return "rgba(" + Math.round(c.r * 255) + "," + Math.round(c.g * 255) + "," + Math.round(c.b * 255) + "," + Math.max(0, Math.min(1, a)).toFixed(3) + ")"
+    }
 
-          Item {
-            required property int index
-            x: index * stripeTrack.pitch
-            y: 0
-            width: stripeTrack.pitch
-            height: parent.height
+    onPaint: {
+      var ctx = getContext("2d")
+      ctx.clearRect(0, 0, width, height)
+      if (!visible || width < 4 || height < 4) return
 
-            // Red / primary stripe
-            Rectangle {
-              x: 0
-              y: -height * 0.2
-              width: stripeTrack.pitch * 0.30
-              height: parent.height * 1.4
-              color: barberRoot.stripeA
-              transform: Rotation { angle: 34 }
-            }
-            // White / light stripe 1
-            Rectangle {
-              x: stripeTrack.pitch * 0.30
-              y: -height * 0.2
-              width: stripeTrack.pitch * 0.20
-              height: parent.height * 1.4
-              color: barberRoot.stripeB
-              transform: Rotation { angle: 34 }
-            }
-            // Blue / secondary stripe
-            Rectangle {
-              x: stripeTrack.pitch * 0.50
-              y: -height * 0.2
-              width: stripeTrack.pitch * 0.30
-              height: parent.height * 1.4
-              color: barberRoot.stripeC
-              transform: Rotation { angle: 34 }
-            }
-            // White / light stripe 2
-            Rectangle {
-              x: stripeTrack.pitch * 0.80
-              y: -height * 0.2
-              width: stripeTrack.pitch * 0.20
-              height: parent.height * 1.4
-              color: barberRoot.stripeB
-              transform: Rotation { angle: 34 }
-            }
-          }
+      var w = width
+      var h = height
+      var r = Math.max(0, Math.min(2, root.cornerRadius))
+      var c = matrixCanvas.phos
+      var punch = Math.max(0.55, Math.min(1.45, root.contrast))
+
+      // Rounded-square clip path
+      ctx.save()
+      ctx.beginPath()
+      ctx.moveTo(r, 0); ctx.lineTo(w - r, 0)
+      if (r > 0) ctx.arcTo(w, 0, w, r, r)
+      ctx.lineTo(w, h - r)
+      if (r > 0) ctx.arcTo(w, h, w - r, h, r)
+      ctx.lineTo(r, h)
+      if (r > 0) ctx.arcTo(0, h, 0, h - r, r)
+      ctx.lineTo(0, r)
+      if (r > 0) ctx.arcTo(0, 0, r, 0, r)
+      ctx.closePath()
+      ctx.clip()
+
+      // Deep CRT phosphor backdrop with subtle center luminescence
+      var bgGrad = ctx.createLinearGradient(0, 0, 0, h)
+      bgGrad.addColorStop(0.0, rgba(matrixCanvas.crtGlow, 0.97))
+      bgGrad.addColorStop(0.5, rgba(matrixCanvas.crtBg, 0.98))
+      bgGrad.addColorStop(1.0, rgba(Qt.darker(matrixCanvas.crtBg, 1.3), 0.99))
+      ctx.fillStyle = bgGrad
+      ctx.fillRect(0, 0, w, h)
+
+      // Subtle atmospheric digital-rain glyph matrix (deterministic hash, zero motion)
+      var glyphs = "01アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワ0123456789ABCDEF"
+      var compact = h < 20
+      var colStep = compact ? 7 : Math.max(10, Math.round(h * 0.38))
+      var rowStep = compact ? 5 : Math.max(7, Math.round(h * 0.27))
+      var fontSize = compact ? 5 : Math.max(7, Math.round(rowStep * 0.9))
+      ctx.font = fontSize + "px monospace"
+      ctx.textBaseline = "top"
+
+      var cols = Math.floor(w / colStep)
+      var rows = Math.max(1, Math.ceil(h / rowStep))
+      for (var col = 0; col < cols; col++) {
+        // Deterministic pseudo-random column density & head row
+        var seed = (col * 2654435761) >>> 0
+        if ((seed % 5) === 0) continue // breathing gaps between rain streams
+        var headRow = seed % (rows + 2)
+        for (var row = 0; row < rows; row++) {
+          var dist = headRow - row
+          if (dist < 0) continue
+          var cellHash = ((seed ^ (row * 2246822519)) >>> 0)
+          var ch = glyphs.charAt(cellHash % glyphs.length)
+          var isHead = (dist === 0)
+          var alpha = isHead ? (0.24 * punch) : (Math.max(0.03, (0.14 - dist * 0.03)) * punch)
+          // Keep widget areas calm while letting subtle phosphor depth show through
+          ctx.fillStyle = isHead ? rgba(Qt.lighter(c, 1.45), Math.min(0.32, alpha)) : rgba(c, Math.min(0.20, alpha))
+          ctx.fillText(ch, col * colStep + 2, row * rowStep)
         }
       }
 
-      // Smoked glass readability scrim + 3D cylindrical shading & top specular
-      // Modulated by the Contrast slider so users can dial stripe punch vs legibility.
-      Rectangle {
-        id: scrim
-        anchors.fill: parent
-        radius: parent.radius
-        readonly property real scrimBias: Math.max(0.45, Math.min(1.25, 1.5 - root.contrast * 0.5))
-        gradient: Gradient {
-          GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, Math.min(0.45, 0.28 * root.contrast)) }
-          GradientStop { position: 0.16; color: Qt.rgba(0.05, 0.06, 0.09, Math.min(0.85, 0.52 * scrim.scrimBias)) }
-          GradientStop { position: 0.55; color: Qt.rgba(0.04, 0.05, 0.08, Math.min(0.90, 0.68 * scrim.scrimBias)) }
-          GradientStop { position: 0.88; color: Qt.rgba(0.02, 0.02, 0.04, Math.min(0.92, 0.78 * scrim.scrimBias)) }
-          GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.88) }
+      // Fine horizontal CRT scanlines
+      ctx.fillStyle = "rgba(0,0,0,0.22)"
+      for (var sy = 1; sy < h; sy += 2) {
+        ctx.fillRect(0, sy, w, 1)
+      }
+
+      // Top & bottom phosphor bloom wash
+      var topBloom = ctx.createLinearGradient(0, 0, 0, Math.max(4, h * 0.35))
+      topBloom.addColorStop(0.0, rgba(c, Math.min(0.22, 0.14 * punch)))
+      topBloom.addColorStop(1.0, rgba(c, 0))
+      ctx.fillStyle = topBloom
+      ctx.fillRect(0, 0, w, Math.max(4, h * 0.35))
+
+      var botBloom = ctx.createLinearGradient(0, h - Math.max(4, h * 0.3), 0, h)
+      botBloom.addColorStop(0.0, rgba(c, 0))
+      botBloom.addColorStop(1.0, rgba(c, Math.min(0.18, 0.11 * punch)))
+      ctx.fillStyle = botBloom
+      ctx.fillRect(0, h - Math.max(4, h * 0.3), w, Math.max(4, h * 0.3))
+
+      // Subtle bus calibration ticks along bottom edge (full bar only)
+      if (!compact && w > 180) {
+        ctx.fillStyle = rgba(c, Math.min(0.45, 0.28 * punch))
+        var tickStep = 24
+        for (var tx = 18; tx < w - 18; tx += tickStep) {
+          var tall = ((tx / tickStep) % 4 === 0)
+          ctx.fillRect(tx, h - (tall ? 4 : 2), 1, tall ? 3 : 1)
         }
       }
 
-      // Thin crisp specular reflection line near top of cylinder
-      Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.topMargin: Math.max(2, Math.round(parent.height * 0.12))
-        anchors.leftMargin: Style.space(6)
-        anchors.rightMargin: Style.space(6)
-        height: 1
-        color: Qt.rgba(1, 1, 1, 0.35)
-      }
-    }
+      ctx.restore()
 
-    // Left chrome end-cap
-    Rectangle {
-      anchors.left: parent.left
-      anchors.top: parent.top
-      anchors.bottom: parent.bottom
-      width: barberRoot.capW
-      topLeftRadius: height / 2
-      bottomLeftRadius: height / 2
-      topRightRadius: 2
-      bottomRightRadius: 2
-      gradient: Gradient {
-        GradientStop { position: 0.0; color: "#e8edf5" }
-        GradientStop { position: 0.28; color: "#9aa5b5" }
-        GradientStop { position: 0.55; color: "#cfd8e3" }
-        GradientStop { position: 0.82; color: "#525b68" }
-        GradientStop { position: 1.0; color: "#2b3038" }
-      }
-      border.width: 1
-      border.color: Qt.rgba(0, 0, 0, 0.45)
-    }
+      // Crisp 1px outer phosphor trace
+      ctx.strokeStyle = rgba(c, Math.min(0.65, 0.42 * punch))
+      ctx.lineWidth = 1
+      ctx.strokeRect(0.5, 0.5, w - 1, h - 1)
 
-    // Right chrome end-cap
-    Rectangle {
-      anchors.right: parent.right
-      anchors.top: parent.top
-      anchors.bottom: parent.bottom
-      width: barberRoot.capW
-      topRightRadius: height / 2
-      bottomRightRadius: height / 2
-      topLeftRadius: 2
-      bottomLeftRadius: 2
-      gradient: Gradient {
-        GradientStop { position: 0.0; color: "#e8edf5" }
-        GradientStop { position: 0.28; color: "#9aa5b5" }
-        GradientStop { position: 0.55; color: "#cfd8e3" }
-        GradientStop { position: 0.82; color: "#525b68" }
-        GradientStop { position: 1.0; color: "#2b3038" }
-      }
-      border.width: 1
-      border.color: Qt.rgba(0, 0, 0, 0.45)
+      // Razor-sharp bright corner targeting brackets (┌ ┐ └ ┘)
+      var arm = compact ? Math.min(5, Math.floor(h * 0.35)) : Math.min(10, Math.floor(h * 0.36))
+      ctx.strokeStyle = rgba(Qt.lighter(c, 1.3), Math.min(1.0, 0.92 * punch))
+      ctx.lineWidth = compact ? 1 : 1.5
+      ctx.beginPath()
+      // Top-left
+      ctx.moveTo(0.75, arm); ctx.lineTo(0.75, 0.75); ctx.lineTo(arm, 0.75)
+      // Top-right
+      ctx.moveTo(w - arm, 0.75); ctx.lineTo(w - 0.75, 0.75); ctx.lineTo(w - 0.75, arm)
+      // Bottom-left
+      ctx.moveTo(0.75, h - arm); ctx.lineTo(0.75, h - 0.75); ctx.lineTo(arm, h - 0.75)
+      // Bottom-right
+      ctx.moveTo(w - arm, h - 0.75); ctx.lineTo(w - 0.75, h - 0.75); ctx.lineTo(w - 0.75, h - arm)
+      ctx.stroke()
     }
   }
 
   // =========================================================================
-  // 2. RUNEFORGE — Forged obsidian stone + antique gold bevel + glowing runes
+  // 2. RUNEFORGE — Chamfered obsidian basalt & hairline etched antique brass.
+  //    Architectural dark-fantasy craft: fine 1px engraved bevels, octagonal
+  //    cut corners, subtle brushed metal depth, and delicate end-cap sigils.
   // =========================================================================
-  Item {
-    id: runeRoot
+  Canvas {
+    id: runeCanvas
     visible: root.art === "runeforge"
     anchors.fill: parent
+    renderStrategy: Canvas.Cooperative
 
-    readonly property color goldBright: root.useTintedPalette ? Qt.lighter(root.acc, 1.35) : "#e5bc5b"
-    readonly property color goldMid: root.useTintedPalette ? root.acc : "#b28228"
-    readonly property color goldDark: root.useTintedPalette ? Qt.darker(root.acc, 2.2) : "#4a330e"
-    readonly property color stoneTop: root.useTintedPalette ? Qt.lighter(root.bg, 1.18) : "#26211c"
-    readonly property color stoneMid: root.useTintedPalette ? root.bg : "#181411"
-    readonly property color stoneBot: root.useTintedPalette ? Qt.darker(root.bg, 1.4) : "#0e0c0a"
-    readonly property color gemColor: root.useTintedPalette ? root.acc : "#3ba4ff"
+    readonly property color brassBright: root.useTintedPalette ? Qt.lighter(root.acc, 1.25) : "#c8ad72"
+    readonly property color brassMuted: root.useTintedPalette ? Qt.darker(root.acc, 1.25) : "#7c653a"
+    readonly property color brassDark: root.useTintedPalette ? Qt.darker(root.acc, 2.4) : "#3a2e1a"
+    readonly property color slateTop: root.useTintedPalette ? Qt.lighter(root.bg, 1.12) : "#1c1a1d"
+    readonly property color slateMid: root.useTintedPalette ? root.bg : "#121114"
+    readonly property color slateBot: root.useTintedPalette ? Qt.darker(root.bg, 1.35) : "#0a090b"
+    readonly property color ember: root.useTintedPalette ? root.acc : "#d9a648"
 
-    // Outer bronze/gold bevel housing
-    Rectangle {
-      anchors.fill: parent
-      radius: Math.min(Style.space(4), root.cornerRadius)
-      gradient: Gradient {
-        GradientStop { position: 0.0; color: runeRoot.goldBright }
-        GradientStop { position: 0.25; color: runeRoot.goldMid }
-        GradientStop { position: 0.75; color: runeRoot.goldDark }
-        GradientStop { position: 1.0; color: "#231708" }
-      }
-      border.width: 1
-      border.color: "#140d05"
+    onWidthChanged: requestPaint()
+    onHeightChanged: requestPaint()
+    onVisibleChanged: if (visible) requestPaint()
 
-      // Inner dark forged stone body
-      Rectangle {
-        anchors.fill: parent
-        anchors.margins: 2
-        radius: Math.max(0, parent.radius - 2)
-        gradient: Gradient {
-          GradientStop { position: 0.0; color: runeRoot.stoneTop }
-          GradientStop { position: 0.45; color: runeRoot.stoneMid }
-          GradientStop { position: 1.0; color: runeRoot.stoneBot }
-        }
-        border.width: 1
-        border.color: Qt.rgba(runeRoot.goldBright.r, runeRoot.goldBright.g, runeRoot.goldBright.b, 0.35)
-
-        // Subtle engraved top & bottom metallic inner highlight lines
-        Rectangle {
-          anchors.left: parent.left
-          anchors.right: parent.right
-          anchors.top: parent.top
-          anchors.margins: 1
-          height: 1
-          color: Qt.rgba(runeRoot.goldBright.r, runeRoot.goldBright.g, runeRoot.goldBright.b, 0.22)
-        }
-
-        // Subtle forged vertical plate seams
-        Repeater {
-          model: 2
-          Rectangle {
-            required property int index
-            x: index === 0 ? Math.round(parent.width * 0.28) : Math.round(parent.width * 0.72)
-            anchors.top: parent.top
-            anchors.bottom: parent.bottom
-            anchors.topMargin: 2
-            anchors.bottomMargin: 2
-            width: 2
-            color: Qt.rgba(0, 0, 0, 0.45)
-
-            Rectangle {
-              anchors.left: parent.right
-              anchors.top: parent.top
-              anchors.bottom: parent.bottom
-              width: 1
-              color: Qt.rgba(runeRoot.goldBright.r, runeRoot.goldBright.g, runeRoot.goldBright.b, 0.22)
-            }
-          }
-        }
-      }
-
-      // Corner forged gold clasps + rivets
-      Repeater {
-        model: [
-          { lx: 0, ty: 0 },
-          { lx: 1, ty: 0 },
-          { lx: 0, ty: 1 },
-          { lx: 1, ty: 1 }
-        ]
-        Rectangle {
-          required property var modelData
-          x: modelData.lx === 0 ? 3 : parent.width - width - 3
-          y: modelData.ty === 0 ? 3 : parent.height - height - 3
-          width: 4
-          height: 4
-          radius: 2
-          color: runeRoot.goldBright
-          border.width: 1
-          border.color: runeRoot.goldDark
-        }
-      }
-
-      // Left & right glowing mana/rune diamond medallions
-      Repeater {
-        model: [0, 1]
-        Rectangle {
-          id: gem
-          required property int modelData
-          x: modelData === 0 ? Style.space(6) : parent.width - width - Style.space(6)
-          anchors.verticalCenter: parent.verticalCenter
-          width: Math.max(6, Math.round(parent.height * 0.26))
-          height: width
-          rotation: 45
-          color: runeRoot.gemColor
-          border.width: 1
-          border.color: runeRoot.goldBright
-
-        }
-      }
-    }
-  }
-
-  // =========================================================================
-  // 3. LONG ROCKET — Full-width horizontal spacecraft with exhaust plume
-  // =========================================================================
-  Item {
-    id: rocketRoot
-    visible: root.art === "rocket"
-    anchors.fill: parent
-
-    readonly property int flameW: Math.max(18, Math.round(height * 0.95))
-    readonly property int nozzleW: Math.max(10, Math.round(height * 0.42))
-    readonly property int noseW: Math.max(22, Math.round(height * 1.15))
-    readonly property color accentPaint: root.useTintedPalette ? root.acc : "#d93829"
-    readonly property color hullTop: root.useTintedPalette ? Qt.lighter(root.bg, 1.45) : "#454c59"
-    readonly property color hullMid: root.useTintedPalette ? root.bg : "#1f232b"
-    readonly property color hullBot: root.useTintedPalette ? Qt.darker(root.bg, 1.4) : "#13161c"
-    readonly property color flameOuter: root.useTintedPalette ? root.acc : "#ff5e1a"
-    readonly property color flameMid: root.useTintedPalette ? Qt.lighter(root.acc, 1.35) : "#ffbe2e"
-
-    // Thruster exhaust plume (left end)
-    Item {
-      id: thrusterPlume
-      x: 0
-      y: 0
-      width: rocketRoot.flameW
-      height: parent.height
-
-
-      // Outer orange/accent flame cone
-      Rectangle {
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        width: Math.max(6, parent.width)
-        height: Math.max(6, parent.height * 0.56)
-        radius: height / 2
-        gradient: Gradient {
-          orientation: Gradient.Horizontal
-          GradientStop { position: 0.0; color: "transparent" }
-          GradientStop { position: 0.45; color: Qt.rgba(rocketRoot.flameOuter.r, rocketRoot.flameOuter.g, rocketRoot.flameOuter.b, 0.85) }
-          GradientStop { position: 1.0; color: rocketRoot.flameMid }
-        }
-      }
-
-      // Hot inner white-yellow plasma core
-      Rectangle {
-        anchors.right: parent.right
-        anchors.verticalCenter: parent.verticalCenter
-        width: Math.max(4, parent.width * 0.58)
-        height: Math.max(4, parent.height * 0.28)
-        radius: height / 2
-        gradient: Gradient {
-          orientation: Gradient.Horizontal
-          GradientStop { position: 0.0; color: "transparent" }
-          GradientStop { position: 0.55; color: rocketRoot.flameMid }
-          GradientStop { position: 1.0; color: "#ffffff" }
-        }
-      }
+    Connections {
+      target: root
+      function onThemeTintChanged() { runeCanvas.requestPaint() }
+      function onCustomBackgroundChanged() { runeCanvas.requestPaint() }
+      function onCustomAccentChanged() { runeCanvas.requestPaint() }
+      function onContrastChanged() { runeCanvas.requestPaint() }
+      function onVerticalChanged() { runeCanvas.requestPaint() }
     }
 
-    // Swept stabilizer fins + engine bell nozzle (vector Canvas painted once on resize)
-    Canvas {
-      id: tailCanvas
-      x: rocketRoot.flameW - 2
-      y: 0
-      width: rocketRoot.nozzleW + 14
-      height: parent.height
-      onWidthChanged: requestPaint()
-      onHeightChanged: requestPaint()
-      onVisibleChanged: if (visible) requestPaint()
-      Connections {
-        target: rocketRoot
-        function onAccentPaintChanged() { tailCanvas.requestPaint() }
-      }
+    Connections {
+      target: Commons.Color
+      function onBackgroundChanged() { if (runeCanvas.visible) runeCanvas.requestPaint() }
+      function onAccentChanged() { if (runeCanvas.visible) runeCanvas.requestPaint() }
+    }
 
-      onPaint: {
-        var ctx = getContext("2d")
-        ctx.clearRect(0, 0, width, height)
-        var nw = rocketRoot.nozzleW
+    function rgba(c, a) {
+      return "rgba(" + Math.round(c.r * 255) + "," + Math.round(c.g * 255) + "," + Math.round(c.b * 255) + "," + Math.max(0, Math.min(1, a)).toFixed(3) + ")"
+    }
 
-        // Top & bottom swept crimson/accent stabilizer fins
-        ctx.fillStyle = String(rocketRoot.accentPaint)
-        ctx.beginPath()
-        ctx.moveTo(nw - 2, 0)
-        ctx.lineTo(width, 0)
-        ctx.lineTo(width, height * 0.22)
-        ctx.lineTo(nw + 3, height * 0.22)
-        ctx.closePath()
-        ctx.fill()
+    function chamferPath(ctx, x, y, w, h, cut) {
+      var c = Math.max(0, Math.min(cut, w / 4, h / 2.2))
+      ctx.beginPath()
+      ctx.moveTo(x + c, y)
+      ctx.lineTo(x + w - c, y)
+      ctx.lineTo(x + w, y + c)
+      ctx.lineTo(x + w, y + h - c)
+      ctx.lineTo(x + w - c, y + h)
+      ctx.lineTo(x + c, y + h)
+      ctx.lineTo(x, y + h - c)
+      ctx.lineTo(x, y + c)
+      ctx.closePath()
+    }
 
-        ctx.beginPath()
-        ctx.moveTo(nw - 2, height)
-        ctx.lineTo(width, height)
-        ctx.lineTo(width, height * 0.78)
-        ctx.lineTo(nw + 3, height * 0.78)
-        ctx.closePath()
-        ctx.fill()
+    onPaint: {
+      var ctx = getContext("2d")
+      ctx.clearRect(0, 0, width, height)
+      if (!visible || width < 6 || height < 6) return
 
-        // Dark gunmetal thruster bell nozzle
-        var ng = ctx.createLinearGradient(0, height * 0.2, 0, height * 0.8)
-        ng.addColorStop(0, "#757e8c")
-        ng.addColorStop(0.5, "#363b45")
-        ng.addColorStop(1, "#181a20")
-        ctx.fillStyle = ng
-        ctx.beginPath()
-        ctx.moveTo(0, height * 0.26)
-        ctx.lineTo(nw + 2, height * 0.16)
-        ctx.lineTo(nw + 2, height * 0.84)
-        ctx.lineTo(0, height * 0.74)
-        ctx.closePath()
-        ctx.fill()
+      var w = width
+      var h = height
+      var compact = h < 20
+      var cut = compact ? 3 : Math.min(7, Math.round(h * 0.22))
+      var punch = Math.max(0.6, Math.min(1.4, root.contrast))
 
-        ctx.strokeStyle = "rgba(0,0,0,0.6)"
+      // Chamfered obsidian slate fill
+      ctx.save()
+      chamferPath(ctx, 0.5, 0.5, w - 1, h - 1, cut)
+      ctx.clip()
+
+      var bodyGrad = ctx.createLinearGradient(0, 0, 0, h)
+      bodyGrad.addColorStop(0.0, String(runeCanvas.slateTop))
+      bodyGrad.addColorStop(0.45, String(runeCanvas.slateMid))
+      bodyGrad.addColorStop(1.0, String(runeCanvas.slateBot))
+      ctx.fillStyle = bodyGrad
+      ctx.fillRect(0, 0, w, h)
+
+      // Subtle forged vertical vignette (warmer center depth, darker edges)
+      var vig = ctx.createLinearGradient(0, 0, w, 0)
+      vig.addColorStop(0.0, "rgba(0,0,0,0.34)")
+      vig.addColorStop(0.18, "rgba(0,0,0,0)")
+      vig.addColorStop(0.82, "rgba(0,0,0,0)")
+      vig.addColorStop(1.0, "rgba(0,0,0,0.34)")
+      ctx.fillStyle = vig
+      ctx.fillRect(0, 0, w, h)
+
+      // Fine forged top specular lip
+      ctx.fillStyle = rgba(runeCanvas.brassBright, Math.min(0.28, 0.16 * punch))
+      ctx.fillRect(cut, 1, w - cut * 2, 1)
+
+      // Subtle engraved interior hairline frame (3px inset)
+      if (!compact) {
+        chamferPath(ctx, 3.5, 3.5, w - 7, h - 7, Math.max(1, cut - 2))
+        ctx.strokeStyle = rgba(runeCanvas.brassBright, Math.min(0.32, 0.18 * punch))
         ctx.lineWidth = 1
         ctx.stroke()
       }
-    }
 
-    // Main rocket fuselage body (hosts all bar widgets cleanly)
-    Rectangle {
-      id: fuselage
-      x: rocketRoot.flameW + rocketRoot.nozzleW - 2
-      y: Math.max(1, Math.round(parent.height * 0.06))
-      width: Math.max(20, parent.width - x - rocketRoot.noseW + 2)
-      height: Math.max(16, parent.height - y * 2)
-      gradient: Gradient {
-        GradientStop { position: 0.0; color: rocketRoot.hullTop }
-        GradientStop { position: 0.24; color: rocketRoot.hullMid }
-        GradientStop { position: 0.80; color: rocketRoot.hullMid }
-        GradientStop { position: 1.0; color: rocketRoot.hullBot }
-      }
-      border.width: 1
-      border.color: Qt.rgba(1, 1, 1, 0.18)
-
-      // Top metallic specular highlight
-      Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        anchors.topMargin: 2
-        height: 1
-        color: Qt.rgba(1, 1, 1, 0.28)
-      }
-
-      // Red/accent racing collar stripe near nose & tail
-      Rectangle {
-        anchors.left: parent.left
-        anchors.leftMargin: Style.space(4)
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.margins: 1
-        width: 3
-        color: rocketRoot.accentPaint
-      }
-
-      Rectangle {
-        anchors.right: parent.right
-        anchors.rightMargin: Style.space(4)
-        anchors.top: parent.top
-        anchors.bottom: parent.bottom
-        anchors.margins: 1
-        width: 3
-        color: rocketRoot.accentPaint
-      }
-
-      // Hull stage seam lines with micro rivets
-      Repeater {
-        model: 3
-        Rectangle {
-          required property int index
-          x: Math.round(parent.width * ((index + 1) / 4))
-          anchors.top: parent.top
-          anchors.bottom: parent.bottom
-          anchors.margins: 2
-          width: 1
-          color: Qt.rgba(0, 0, 0, 0.35)
+      // Delicate etched diamond sigil clasps at left & right ends
+      if (!compact && w > 120) {
+        var cy = h / 2
+        var dr = Math.min(3.5, h * 0.11)
+        var centers = [cut + 5, w - cut - 5]
+        for (var i = 0; i < centers.length; i++) {
+          var cx = centers[i]
+          ctx.beginPath()
+          ctx.moveTo(cx, cy - dr)
+          ctx.lineTo(cx + dr, cy)
+          ctx.lineTo(cx, cy + dr)
+          ctx.lineTo(cx - dr, cy)
+          ctx.closePath()
+          ctx.fillStyle = rgba(runeCanvas.ember, Math.min(0.85, 0.55 * punch))
+          ctx.fill()
+          ctx.strokeStyle = rgba(runeCanvas.brassBright, Math.min(0.95, 0.72 * punch))
+          ctx.lineWidth = 1
+          ctx.stroke()
         }
       }
-    }
+      ctx.restore()
 
-    // Aerodynamic pointed nosecone (right end)
-    Canvas {
-      id: noseCanvas
-      x: fuselage.x + fuselage.width - 1
-      y: fuselage.y
-      width: rocketRoot.noseW + 1
-      height: fuselage.height
-      onWidthChanged: requestPaint()
-      onHeightChanged: requestPaint()
-      onVisibleChanged: if (visible) requestPaint()
-      Connections {
-        target: rocketRoot
-        function onAccentPaintChanged() { noseCanvas.requestPaint() }
-        function onHullTopChanged() { noseCanvas.requestPaint() }
-        function onHullMidChanged() { noseCanvas.requestPaint() }
-      }
+      // Outer hairline antique-brass metallic bevel
+      var rimGrad = ctx.createLinearGradient(0, 0, 0, h)
+      rimGrad.addColorStop(0.0, rgba(runeCanvas.brassBright, Math.min(0.95, 0.72 * punch)))
+      rimGrad.addColorStop(0.5, rgba(runeCanvas.brassMuted, Math.min(0.85, 0.60 * punch)))
+      rimGrad.addColorStop(1.0, rgba(runeCanvas.brassDark, Math.min(0.95, 0.80 * punch)))
+      chamferPath(ctx, 0.5, 0.5, w - 1, h - 1, cut)
+      ctx.strokeStyle = rimGrad
+      ctx.lineWidth = 1.25
+      ctx.stroke()
 
-      onPaint: {
-        var ctx = getContext("2d")
-        ctx.clearRect(0, 0, width, height)
-
-        // Smooth ogive nosecone silhouette
-        ctx.save()
-        ctx.beginPath()
-        ctx.moveTo(0, 0)
-        ctx.quadraticCurveTo(width * 0.62, 0, width - 1, height / 2)
-        ctx.quadraticCurveTo(width * 0.62, height, 0, height)
-        ctx.closePath()
-        ctx.clip()
-
-        // Base metallic hull gradient
-        var g = ctx.createLinearGradient(0, 0, 0, height)
-        g.addColorStop(0, String(rocketRoot.hullTop))
-        g.addColorStop(0.35, String(rocketRoot.hullMid))
-        g.addColorStop(1, String(rocketRoot.hullBot))
-        ctx.fillStyle = g
-        ctx.fillRect(0, 0, width, height)
-
-        // Painted red/accent nose tip
-        ctx.fillStyle = String(rocketRoot.accentPaint)
-        ctx.fillRect(width * 0.48, 0, width * 0.55, height)
-
-        // Glossy specular ridge on nosecone
-        ctx.fillStyle = "rgba(255,255,255,0.26)"
-        ctx.fillRect(0, 2, width * 0.85, 2)
-        ctx.restore()
-
-        // Crisp nosecone outline
-        ctx.beginPath()
-        ctx.moveTo(0, 0.5)
-        ctx.quadraticCurveTo(width * 0.62, 0.5, width - 1, height / 2)
-        ctx.quadraticCurveTo(width * 0.62, height - 0.5, 0, height - 0.5)
-        ctx.strokeStyle = "rgba(255,255,255,0.22)"
-        ctx.lineWidth = 1
-        ctx.stroke()
-      }
+      // Crisp bright brass corner facets along the 45-degree chamfers
+      ctx.strokeStyle = rgba(runeCanvas.brassBright, Math.min(1.0, 0.85 * punch))
+      ctx.lineWidth = 1.25
+      ctx.beginPath()
+      ctx.moveTo(0.5, cut + 0.5); ctx.lineTo(cut + 0.5, 0.5)
+      ctx.moveTo(w - cut - 0.5, 0.5); ctx.lineTo(w - 0.5, cut + 0.5)
+      ctx.stroke()
     }
   }
 }

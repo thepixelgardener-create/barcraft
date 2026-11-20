@@ -3,6 +3,7 @@ import Quickshell
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+import "SkinParser.js" as SkinParser
 
 // The Barcraft button. Click opens Barcraft Studio, a keyboard panel, so it
 // also opens from a keybinding (`omarchy-shell shell toggle
@@ -110,7 +111,7 @@ BarWidget {
       if (!eng) return barcraftStrings.t("tooltip").arg("")
       eng.revision
       var name = eng.standard ? barcraftStrings.t("label.standard") : (eng.committedSkin ? eng.committedSkin.name : "")
-      return barcraftStrings.t("tooltip").arg(name)
+      return barcraftStrings.t("tooltip").arg(SkinParser.neutralizeMarkup(name))
     }
     onPressed: function(mouseButton) {
       root.locateEngine()
