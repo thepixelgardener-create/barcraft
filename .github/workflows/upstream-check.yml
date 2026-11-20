@@ -1,0 +1,108 @@
+name: Upstream Omarchy Bar Check
+
+on:
+  schedule:
+    # Mondays at 09:00 UTC
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-upstream:
+    name: Compare against omacom/omarchy bar
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Fetch upstream bar files and compare
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+
+          changed=()
+          for f in Bar.qml BarModel.js; do
+            curl -fsSL \
+              "https://raw.githubusercontent.com/omacom/omarchy/quattro/shell/plugins/bar/$f" \
+              -o "$tmp/$f"
+            if ! cmp -s "upstream/$f.orig" "$tmp/$f"; then
+              changed+=("$f")
+            fi
+          done
+
+          if (( ${#changed[@]} == 0 )); then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Barcraft upstream base matches omacom/omarchy (quattro)."
+            exit 0
+          fi
+
+          upstream_sha="$(gh api 'repos/omacom/omarchy/commits?sha=quattro&path=shell/plugins/bar&per_page=1' --jq '.[0].sha // "unknown"')"
+          upstream_msg="$(gh api 'repos/omacom/omarchy/commits?sha=quattro&path=shell/plugins/bar&per_page=1' --jq '.[0].commit.message | split("\n")[0] // ""')"
+          last_sync="$(cat upstream/VERSION 2>/dev/null || echo unknown)"
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "files=${changed[*]}" >> "$GITHUB_OUTPUT"
+          echo "sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${upstream_sha:0:7}" >> "$GITHUB_OUTPUT"
+          echo "msg=$upstream_msg" >> "$GITHUB_OUTPUT"
+          echo "last_sync=$last_sync" >> "$GITHUB_OUTPUT"
+
+          echo "Upstream changed: ${changed[*]} (commit ${upstream_sha:0:7}: $upstream_msg)"
+
+      - name: Open or update tracking issue
+        if: steps.compare.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHANGED_FILES: ${{ steps.compare.outputs.files }}
+          UPSTREAM_SHA: ${{ steps.compare.outputs.sha }}
+          UPSTREAM_SHORT: ${{ steps.compare.outputs.short_sha }}
+          UPSTREAM_MSG: ${{ steps.compare.outputs.msg }}
+          LAST_SYNC: ${{ steps.compare.outputs.last_sync }}
+        run: |
+          set -euo pipefail
+
+          # Ensure the 'upstream' label exists.
+          gh label create upstream \
+            --description "Upstream Omarchy bar changes to merge" \
+            --color "5319e7" \
+            --force >/dev/null
+
+          existing="$(gh issue list --state open --label upstream --json number,body --jq '.[0] // empty')"
+
+          body="$(cat <<EOF
+          Upstream \`omacom/omarchy\` (\`quattro\`) modified the stock bar plugin since Barcraft's last sync (\`${LAST_SYNC}\`).
+
+          - **Changed files:** \`${CHANGED_FILES}\`
+          - **Latest upstream commit:** [\`${UPSTREAM_SHORT}\`](https://github.com/omacom/omarchy/commit/${UPSTREAM_SHA}) — ${UPSTREAM_MSG}
+
+          ### How to sync
+          \`\`\`bash
+          scripts/sync-upstream.sh
+          omarchy agent look plugin .
+          \`\`\`
+          If three-way merge reports conflicts, resolve them and run \`scripts/sync-upstream.sh --mark-synced\`.
+          EOF
+          )"
+
+          if [[ -z "$existing" ]]; then
+            gh issue create \
+              --title "Upstream Omarchy bar updated (${UPSTREAM_SHORT})" \
+              --label upstream \
+              --body "$body"
+          else
+            issue_num="$(jq -r '.number' <<<"$existing")"
+            if ! gh issue view "$issue_num" --json body,comments \
+              --jq '[.body, (.comments[].body)] | join("\n")' | grep -Fq "$UPSTREAM_SHA"; then
+              gh issue comment "$issue_num" --body "$body"
+            else
+              echo "Issue #$issue_num already mentions commit $UPSTREAM_SHORT; skipping comment."
+            fi
+          fi

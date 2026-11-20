@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Validate & test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check manifest, i18n parity, and QML invariants
+        run: |
+          node -e '
+            const fs = require("fs");
+            const path = require("path");
+
+            const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+            for (const field of ["id", "name", "version", "license", "kinds", "entryPoints"]) {
+              if (!manifest[field]) throw new Error("manifest.json missing " + field);
+            }
+            if (manifest.license !== "MIT") throw new Error("Unexpected license: " + manifest.license);
+            if (!fs.existsSync("LICENSE")) throw new Error("Missing LICENSE file");
+
+            const en = JSON.parse(fs.readFileSync("i18n/en.json", "utf8"));
+            const de = JSON.parse(fs.readFileSync("i18n/de.json", "utf8"));
+            const enKeys = Object.keys(en).sort();
+            const deKeys = Object.keys(de).sort();
+            const missingInDe = enKeys.filter(k => !(k in de));
+            const extraInDe = deKeys.filter(k => !(k in en));
+            if (missingInDe.length || extraInDe.length) {
+              throw new Error(
+                "i18n key mismatch: missing in de=" + JSON.stringify(missingInDe) +
+                ", extra in de=" + JSON.stringify(extraInDe)
+              );
+            }
+
+            // Guard against Qt 6.12 TextInput clipboard DoS regressions in plugin and kit QML.
+            function walkQml(dir) {
+              const out = [];
+              for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+                if (ent.name === ".git" || ent.name === "upstream" || ent.name === "tests") continue;
+                const full = path.join(dir, ent.name);
+                if (ent.isDirectory()) out.push(...walkQml(full));
+                else if (ent.name.endsWith(".qml")) out.push(full);
+              }
+              return out;
+            }
+            for (const file of walkQml(".")) {
+              const lines = fs.readFileSync(file, "utf8").split("\n");
+              lines.forEach((line, idx) => {
+                const code = line.replace(/\/\/.*$/, "");
+                if (/\bTextInput\s*\{/.test(code)) {
+                  throw new Error(`${file}:${idx + 1} instantiates TextInput; use LineField instead`);
+                }
+              });
+            }
+            console.log(`Checked manifest (${manifest.version}), ${enKeys.length} i18n keys, and QML invariants.`);
+          '
+
+      - name: Run SkinParser & security tests
+        run: node tests/skinparser.test.js
+
+      - name: Install Qt 6 test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qt6-declarative-dev-tools \
+            qml6-module-qtquick \
+            qml6-module-qtquick-controls \
+            qml6-module-qtquick-layouts \
+            qml6-module-qtquick-shapes \
+            qml6-module-qtquick-templates \
+            qml6-module-qtquick-window \
+            qml6-module-qttest \
+            libgl1 \
+            libegl1 \
+            libxkbcommon0
+
+      - name: Run Qt Quick tests (offscreen)
+        env:
+          QT_QPA_PLATFORM: offscreen
+          QT_QUICK_BACKEND: software
+        run: /usr/lib/qt6/bin/qmltestrunner -input tests
