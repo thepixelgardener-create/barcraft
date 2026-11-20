@@ -10,10 +10,7 @@
   "screens.all": "All screens",
   "hint.screenSkin": "Height and icon color follow the main skin on every screen.",
   "action.useMain": "Use main skin",
-  "section.builtin": "Classic",
-  "section.wild": "Wild Craft",
   "section.user": "Your skins",
-  "hint.noUserSkins": "Save one from any of the other tabs, or paste one someone shared.",
   "card.theme": "Theme skin",
   "card.rename": "Rename (R)",
   "card.delete": "Delete (Del)",
@@ -125,5 +122,6 @@
   "tab.geometry": "Geometry",
   "tab.surface": "Surface",
   "tab.behavior": "Behavior",
-  "section.tone": "Tone"
+  "section.tone": "Tone",
+  "tile.standard": "Omarchy"
 }

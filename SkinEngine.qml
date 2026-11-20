@@ -233,7 +233,7 @@ Item {
   // ---- Choosing ------------------------------------------------------------
 
   function previewById(id, screenName) {
-    var s = id === "theme" ? themeSkin : findSkinById(id)
+    var s = id === "theme" ? themeSkin : (id === "standard" ? SkinParser.standardSkin() : findSkinById(id))
     if (!s) return
     previewScreen = String(screenName || "")
     previewSkin = s

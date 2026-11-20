@@ -62,6 +62,15 @@ BarWidget {
     else open()
   }
 
+  // Open on a tab: presets, colors, geometry, surface or behavior.
+  property string requestedTab: ""
+  property int tabRequest: 0
+  function openTab(tab) {
+    requestedTab = String(tab || "")
+    tabRequest++
+    open()
+  }
+
   function closeForPopoutSwitch() {
     popoutSwitchClosing = true
     close()
@@ -146,6 +155,8 @@ BarWidget {
         engine: root.skinEngine
         strings: barcraftStrings
         panelOpen: root.panelOpen
+        requestedTab: root.requestedTab
+        tabRequest: root.tabRequest
         keyTarget: keyCatcher
         maxHeight: Math.max(Style.space(320), panel.availableCardHeight - panel.verticalContentInset)
       }

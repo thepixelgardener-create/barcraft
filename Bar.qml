@@ -721,6 +721,11 @@ Item {
     function current(): string { return skin.currentId() }
     function doctor(): string { return skin.doctor() }
     function reveal(): void { root.barcraftRevealSerial++ }
+    // Open the Studio on a tab: presets, colors, geometry, surface, behavior.
+    function studio(tab: string): void {
+      var item = root.findPanelWidget("thepixelgardener.barcraft")
+      if (item && typeof item.openTab === "function") item.openTab(tab)
+    }
     // Changes made here show their result in Omarchy's OSD.
     function toggleAutoHide(): void { skin.toggleAutoHide(); skin.announce() }
     function next(): string { var name = skin.cycleSkin(); skin.announce(); return name }

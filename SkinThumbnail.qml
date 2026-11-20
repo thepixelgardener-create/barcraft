@@ -11,6 +11,8 @@ Item {
 
   property var skin: null
   property var paletteMap: ({})
+  // Draw Omarchy's own bar (the Omarchy standard tile).
+  property bool standard: false
   property bool highlighted: false
 
   readonly property real k: 0.42
@@ -19,6 +21,7 @@ Item {
     id: tl
     skin: thumb.skin
     paletteMap: thumb.paletteMap
+    standard: thumb.standard
   }
 
   // From the resolved pixels, so "auto" draws with this desktop's own

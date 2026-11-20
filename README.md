@@ -8,7 +8,7 @@ Barcraft (`thepixelgardener.barcraft`) is Omarchy's own bar with a skin engine o
 
 ## Highlights
 
-- **Omarchy standard switch.** One switch at the top of the Studio shows the bar exactly as Omarchy ships it, measured pixel-identical to `omarchy.bar`. Your skins stay; pick one to switch back. Unlike `omarchy bar use omarchy.bar`, the Barcraft pill and Studio stay on the bar, since Omarchy only loads a bar plugin's widget while that bar is active.
+- **Omarchy standard.** The first tile in the Studio (click it again to leave) shows the bar exactly as Omarchy ships it, measured pixel-identical to `omarchy.bar`. Your skins stay; pick one to switch back. Unlike `omarchy bar use omarchy.bar`, the Barcraft pill and Studio stay on the bar, since Omarchy only loads a bar plugin's widget while that bar is active.
 - **Presets built from Omarchy's tokens.** "Auto" geometry follows the foundation: the theme's bar size (`[bar] size-horizontal`), Omarchy's panel gap to the screen edge, Hyprland's `gaps_out` at the sides so the bar lines up with your windows, Hyprland's `decoration:rounding` for corners, and the theme's bar alpha. Change your Hyprland rounding or theme and the bar follows.
 - **8 built-in skins.** Classic: `Floating`, `Islands`, `Frosted`, `Capsule`, `Editorial`. Wild Craft (illustrated, still art): `Barber Pole`, `Runeforge`, `Long Rocket`.
 - **Barcraft Studio.** Click the Barcraft pill. Tabs: **Skins · Colors · Geometry · Surface · Behavior**. Hover a skin (or move the keyboard cursor onto it) to preview it on the bar, click to keep it. Edit every field live, save, rename and delete skins, copy one as TOML or paste one someone shared.
@@ -53,6 +53,7 @@ o.bind("SUPER + SHIFT + B", "Next bar skin", { ipc = "barcraft.next" })
 
 ```bash
 omarchy-shell shell toggle thepixelgardener.barcraft   # open/close the Studio
+omarchy-shell barcraft studio geometry                 # open it on a tab: presets, colors, geometry, surface, behavior
 omarchy-shell barcraft reveal                          # peek an auto-hidden bar out
 omarchy-shell barcraft next                            # next skin (OSD), prints its name
 omarchy-shell barcraft setSkin islands                 # any skin id, "standard" or "theme"

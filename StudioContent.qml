@@ -22,6 +22,11 @@ Column {
   // The card's room for this content, so the body scrolls rather than grows.
   property real maxHeight: Style.space(680)
   property bool panelOpen: true
+  // Set by the widget to open on a tab (`omarchy-shell barcraft studio geometry`).
+  property string requestedTab: ""
+  property int tabRequest: 0
+  onTabRequestChanged: if (requestedTab !== "") setTab(requestedTab)
+  Component.onCompleted: if (requestedTab !== "") setTab(requestedTab)
   // The key catcher, to hand the keyboard back to after editing text.
   property Item keyTarget: null
 
@@ -50,8 +55,8 @@ Column {
     return out
   }
   readonly property var palette: engine ? engine.themeColors : ({})
-  // Skin tiles, three to a row.
-  readonly property real cardWidth: Math.floor((width - Style.spacing.md * 2) / 3)
+  // Skin tiles, four to a row.
+  readonly property real cardWidth: Math.floor((width - Style.spacing.sm * 3) / 4)
 
   spacing: Style.spacing.panelGap
 
@@ -150,6 +155,10 @@ Column {
     if (!engine) return
     pendingPreview = ""
     previewTimer.stop()
+    if (id === "standard") {
+      engine.setStandard(!engine.standard)
+      return
+    }
     if (screenTarget === "") engine.selectSkin(id)
     else engine.selectForScreen(screenTarget, id)
   }
@@ -404,212 +413,137 @@ Column {
     Column {
       id: bodyColumn
       width: body.width
-      spacing: Style.spacing.panelGap
+      spacing: Style.spacing.md
 
       // ======================================================================
       // SKINS
       // ======================================================================
       Column {
         width: parent.width
-        spacing: Style.spacing.panelGap
+        spacing: Style.spacing.md
         visible: root.activeTab === "presets" && !!root.engine
 
-        // The way back to Omarchy's own bar, kept at the top so it's never
-        // more than a keypress away. Picking any skin turns it off again.
-        ToggleRow {
-          navKey: "standard"
-          label: root.tr("label.standard", "Omarchy standard")
-          hint: root.tr("label.standardHint", "")
-          checked: root.engine ? root.engine.standard : false
-          onToggled: if (root.engine) root.engine.setStandard(!root.engine.standard)
-        }
-
-        PanelSeparator {
-          width: parent.width
-          foreground: root.fg
-        }
-
         // Per-screen skins, when there is more than one screen.
-        Column {
-          width: parent.width
-          spacing: Style.spacing.sm
+        ChoiceRow {
+          navKey: "screens"
           visible: root.screenNames.length > 1
-
-          ChoiceRow {
-            navKey: "screens"
-            label: root.tr("label.applyTo", "Apply to")
-            value: root.screenTarget === "" ? "*all*" : root.screenTarget
-            options: {
-              var out = [{ value: "*all*", label: root.tr("screens.all", "All screens") }]
-              for (var i = 0; i < root.screenNames.length; i++) out.push({ value: root.screenNames[i], label: root.screenNames[i] })
-              return out
-            }
-            onPicked: function(v) {
-              root.screenTarget = v === "*all*" ? "" : v
-              root.pendingPreview = ""
-              previewTimer.restart()
-            }
+          label: root.tr("label.applyTo", "Apply to")
+          value: root.screenTarget === "" ? "*all*" : root.screenTarget
+          options: {
+            var out = [{ value: "*all*", label: root.tr("screens.all", "All screens") }]
+            for (var i = 0; i < root.screenNames.length; i++) out.push({ value: root.screenNames[i], label: root.screenNames[i] })
+            return out
           }
-
-          RowLayout {
-            width: parent.width
-            visible: root.screenTarget !== ""
-            spacing: Style.spacing.md
-
-            HintText {
-              Layout.fillWidth: true
-              text: root.tr("hint.screenSkin", "")
-            }
-
-            ActionButton {
-              navKey: "useMain"
-              visible: !!root.engine && (root.engine.revision, root.engine.hasMonitorSkin(root.screenTarget))
-              text: root.tr("action.useMain", "Use main skin")
-              onTriggered: if (root.engine) root.engine.selectForScreen(root.screenTarget, "")
-            }
+          onPicked: function(v) {
+            root.screenTarget = v === "*all*" ? "" : v
+            root.pendingPreview = ""
+            previewTimer.restart()
           }
         }
 
-        Column {
+        RowLayout {
           width: parent.width
+          visible: root.screenTarget !== ""
           spacing: Style.spacing.md
-
-          PanelSectionHeader {
-            foreground: root.fg
-            text: root.tr("section.builtin", "Classic")
-          }
-
-          Grid {
-            width: parent.width
-            columns: 3
-            columnSpacing: Style.spacing.md
-            rowSpacing: Style.spacing.md
-
-            SkinCard {
-              visible: !!root.engine && root.engine.themeSkin !== null
-              width: root.cardWidth
-              cardId: "theme"
-              skinData: root.engine ? root.engine.themeSkin : null
-              title: root.tr("card.theme", "Theme skin")
-              subtitle: root.engine && root.engine.themeSkin ? root.engine.themeSkin.name : ""
-            }
-
-            Repeater {
-              model: root.engine ? root.engine.classicSkins : []
-
-              SkinCard {
-                required property var modelData
-                width: root.cardWidth
-                cardId: modelData.id
-                skinData: modelData
-                title: modelData.name
-                subtitle: root.skinDescription(modelData)
-              }
-            }
-          }
-        }
-
-        PanelSeparator {
-          width: parent.width
-          foreground: root.fg
-        }
-
-        Column {
-          width: parent.width
-          spacing: Style.spacing.md
-
-          PanelSectionHeader {
-            foreground: root.fg
-            text: root.tr("section.wild", "Wild Craft")
-          }
-
-          Grid {
-            width: parent.width
-            columns: 3
-            columnSpacing: Style.spacing.md
-            rowSpacing: Style.spacing.md
-
-            Repeater {
-              model: root.engine ? root.engine.wildSkins : []
-
-              SkinCard {
-                required property var modelData
-                width: root.cardWidth
-                cardId: modelData.id
-                skinData: modelData
-                title: modelData.name
-                subtitle: root.skinDescription(modelData)
-              }
-            }
-          }
-        }
-
-        PanelSeparator {
-          width: parent.width
-          foreground: root.fg
-        }
-
-        // Saved skins (~/.config/omarchy/bar-skins/*.toml)
-        Column {
-          width: parent.width
-          spacing: Style.spacing.md
-
-          RowLayout {
-            width: parent.width
-            spacing: Style.spacing.md
-
-            PanelSectionHeader {
-              Layout.fillWidth: true
-              foreground: root.fg
-              text: root.tr("section.user", "Your skins")
-            }
-
-            ActionButton {
-              navKey: "pasteSkins"
-              text: root.tr("action.paste", "Paste skin")
-              iconText: "󰆒"
-              onTriggered: if (root.engine) root.engine.importFromClipboard()
-            }
-          }
 
           HintText {
-            width: parent.width
-            visible: !!root.engine && root.engine.userSkins.length === 0
-            text: root.tr("hint.noUserSkins", "")
+            Layout.fillWidth: true
+            text: root.tr("hint.screenSkin", "")
           }
 
-          Grid {
-            width: parent.width
-            columns: 3
-            columnSpacing: Style.spacing.md
-            rowSpacing: Style.spacing.md
-            visible: !!root.engine && root.engine.userSkins.length > 0
+          ActionButton {
+            navKey: "useMain"
+            visible: !!root.engine && (root.engine.revision, root.engine.hasMonitorSkin(root.screenTarget))
+            text: root.tr("action.useMain", "Use main skin")
+            onTriggered: if (root.engine) root.engine.selectForScreen(root.screenTarget, "")
+          }
+        }
 
-            Repeater {
-              model: root.engine ? root.engine.userSkins : []
+        // Every skin in one grid: Omarchy's own bar first (the way back,
+        // a click again leaves it), the theme's skin, the presets.
+        Grid {
+          width: parent.width
+          columns: 4
+          columnSpacing: Style.spacing.sm
+          rowSpacing: Style.spacing.sm
 
-              SkinCard {
-                required property var modelData
-                width: root.cardWidth
-                cardId: modelData.id
-                skinData: modelData
-                title: modelData.name
-                subtitle: root.skinDescription(modelData)
-                userSkin: true
-              }
+          SkinCard {
+            visible: root.screenTarget === ""
+            width: root.cardWidth
+            cardId: "standard"
+            standardTile: true
+            title: root.tr("tile.standard", "Omarchy")
+            subtitle: root.tr("label.standardHint", "")
+          }
+
+          SkinCard {
+            visible: !!root.engine && root.engine.themeSkin !== null
+            width: root.cardWidth
+            cardId: "theme"
+            skinData: root.engine ? root.engine.themeSkin : null
+            title: root.tr("card.theme", "Theme skin")
+            subtitle: root.engine && root.engine.themeSkin ? root.engine.themeSkin.name : ""
+          }
+
+          Repeater {
+            model: root.engine ? root.engine.builtinSkins : []
+
+            SkinCard {
+              required property var modelData
+              width: root.cardWidth
+              cardId: modelData.id
+              skinData: modelData
+              title: modelData.name
+              subtitle: root.skinDescription(modelData)
             }
           }
         }
 
-        PanelSeparator {
+        // Saved skins (~/.config/omarchy/bar/skins/*.toml)
+        RowLayout {
           width: parent.width
-          foreground: root.fg
-          visible: root.screenTarget === ""
+          spacing: Style.spacing.md
+
+          PanelSectionHeader {
+            Layout.fillWidth: true
+            foreground: root.fg
+            text: root.tr("section.user", "Your skins")
+          }
+
+          ActionButton {
+            navKey: "pasteSkins"
+            text: root.tr("action.paste", "Paste skin")
+            iconText: "󰆒"
+            onTriggered: if (root.engine) root.engine.importFromClipboard()
+          }
         }
 
+        Grid {
+          width: parent.width
+          columns: 4
+          columnSpacing: Style.spacing.sm
+          rowSpacing: Style.spacing.sm
+          visible: !!root.engine && root.engine.userSkins.length > 0
+
+          Repeater {
+            model: root.engine ? root.engine.userSkins : []
+
+            SkinCard {
+              required property var modelData
+              width: root.cardWidth
+              cardId: modelData.id
+              skinData: modelData
+              title: modelData.name
+              subtitle: root.skinDescription(modelData)
+              userSkin: true
+            }
+          }
+        }
+
+        // Only when the theme ships a [bar-skin] to follow.
         ToggleRow {
           navKey: "followTheme"
-          visible: root.screenTarget === ""
+          visible: root.screenTarget === "" && !!root.engine && root.engine.themeSkin !== null
           label: root.tr("label.followTheme", "Follow theme skin")
           hint: root.tr("label.followThemeHint", "")
           checked: root.engine ? root.engine.followTheme : true
@@ -623,13 +557,12 @@ Column {
       // COLORS: fill, what to paint, the picker
       Column {
         width: parent.width
-        spacing: Style.spacing.panelGap
+        spacing: Style.spacing.md
         visible: root.activeTab === "colors" && !!root.engine
 
         StandardHint {}
 
         Section {
-          separated: false
           // The tab already says it.
           title: ""
 
@@ -739,13 +672,12 @@ Column {
       // GEOMETRY: architecture, size, gaps, width, corners, icons
       Column {
         width: parent.width
-        spacing: Style.spacing.panelGap
+        spacing: Style.spacing.md
         visible: root.activeTab === "geometry" && !!root.engine
 
         StandardHint {}
 
         Section {
-          separated: false
           title: root.tr("section.mode", "Architecture")
 
           ChoiceRow {
@@ -855,13 +787,12 @@ Column {
       // SURFACE: opacity, depth, contrast, border, widgets, shadow, blur, bezel, art
       Column {
         width: parent.width
-        spacing: Style.spacing.panelGap
+        spacing: Style.spacing.md
         visible: root.activeTab === "surface" && !!root.engine
 
         StandardHint {}
 
         Section {
-          separated: false
           title: ""
 
           SliderRow {
@@ -997,13 +928,12 @@ Column {
       // BEHAVIOR: auto-hide, and how Barcraft joins Omarchy
       Column {
         width: parent.width
-        spacing: Style.spacing.panelGap
+        spacing: Style.spacing.md
         visible: root.activeTab === "behavior" && !!root.engine
 
         StandardHint {}
 
         Section {
-          separated: false
           title: ""
 
           ToggleRow {
@@ -1226,17 +1156,12 @@ Column {
     }
   }
 
+  // A group inside a tab: a small header, then its rows close together.
   component Section: Column {
     property string title: ""
-    property bool separated: true
+    property bool separated: false
     width: parent.width
-    spacing: Style.spacing.md
-
-    PanelSeparator {
-      visible: parent.separated
-      width: parent.width
-      foreground: root.fg
-    }
+    spacing: Style.spacing.sm
 
     PanelSectionHeader {
       visible: parent.title !== ""
@@ -1265,6 +1190,7 @@ Column {
     wrapMode: Text.WordWrap
   }
 
+  // One line: the label, then the choices.
   component ChoiceRow: NavItem {
     id: choice
     property string label: ""
@@ -1273,7 +1199,7 @@ Column {
     signal picked(string value)
 
     width: parent ? parent.width : 0
-    implicitHeight: choiceColumn.implicitHeight
+    implicitHeight: choiceLine.implicitHeight
     height: implicitHeight
 
     function indexOfValue() {
@@ -1292,23 +1218,27 @@ Column {
       picked(options[(indexOfValue() + 1) % options.length].value)
     }
 
-    Column {
-      id: choiceColumn
+    RowLayout {
+      id: choiceLine
       width: parent.width
-      spacing: Style.spacing.sm
+      spacing: Style.spacing.md
 
       Text {
         visible: choice.label !== ""
+        Layout.fillWidth: true
+        Layout.minimumWidth: Style.space(40)
         textFormat: Text.PlainText
         text: choice.label
         color: root.fg
         font.family: Style.font.family
         font.pixelSize: Style.font.bodySmall
+        elide: Text.ElideRight
       }
 
       ButtonGroup {
         focusable: false
         foreground: root.fg
+        fontSize: Style.font.bodySmall
         value: choice.value
         options: choice.options
         onChanged: function(v) { choice.picked(v) }
@@ -1316,6 +1246,7 @@ Column {
     }
   }
 
+  // One line: label, slider, Auto, value.
   component SliderRow: NavItem {
     id: sRow
     property string label: ""
@@ -1332,7 +1263,7 @@ Column {
     signal autoToggled()
 
     width: parent ? parent.width : 0
-    implicitHeight: sliderColumn.implicitHeight
+    implicitHeight: sliderLine.implicitHeight
     height: implicitHeight
     onActivate: if (autoAvailable) autoToggled()
 
@@ -1343,61 +1274,23 @@ Column {
       if (Math.abs(next - value) > 0.0001) changedValue(next)
     }
 
-    Column {
-      id: sliderColumn
+    RowLayout {
+      id: sliderLine
       width: parent.width
-      spacing: Style.space(2)
+      spacing: Style.spacing.sm
 
-      RowLayout {
-        width: parent.width
-        Text {
-          textFormat: Text.PlainText
-          text: sRow.label
-          color: root.fg
-          font.family: Style.font.family
-          font.pixelSize: Style.font.bodySmall
-          Layout.fillWidth: true
-        }
-        Rectangle {
-          visible: sRow.autoAvailable
-          Layout.preferredWidth: autoLabel.implicitWidth + Style.space(12)
-          Layout.preferredHeight: autoLabel.implicitHeight + Style.space(4)
-          radius: Math.min(height / 2, Style.cornerRadius)
-          color: sRow.isAuto ? Style.selectedFillFor(root.fg, Commons.Color.accent) : "transparent"
-          border.width: 1
-          border.color: sRow.isAuto ? Commons.Color.accent : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, autoMouse.containsMouse ? 0.5 : 0.25)
-
-          Text {
-            id: autoLabel
-            anchors.centerIn: parent
-            textFormat: Text.PlainText
-            text: root.tr("label.auto", "Auto")
-            color: sRow.isAuto ? Commons.Color.accent : root.dimFg
-            font.family: Style.font.family
-            font.pixelSize: Style.font.caption
-            font.bold: sRow.isAuto
-          }
-
-          MouseArea {
-            id: autoMouse
-            anchors.fill: parent
-            hoverEnabled: true
-            cursorShape: Qt.PointingHandCursor
-            onClicked: sRow.autoToggled()
-          }
-        }
-        Text {
-          textFormat: Text.PlainText
-          text: sRow.valueText
-          color: root.dimFg
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          font.bold: true
-        }
+      Text {
+        Layout.preferredWidth: Math.round(sRow.width * 0.3)
+        textFormat: Text.PlainText
+        text: sRow.label
+        color: root.fg
+        font.family: Style.font.family
+        font.pixelSize: Style.font.bodySmall
+        elide: Text.ElideRight
       }
 
       PanelSlider {
-        width: parent.width
+        Layout.fillWidth: true
         bar: root.bar
         minimum: sRow.minimum
         maximum: sRow.maximum
@@ -1406,6 +1299,48 @@ Column {
         value: sRow.value
         onMoved: function(v) { sRow.changedValue(v) }
         onReleased: function(v) { sRow.changedValue(v) }
+      }
+
+      Rectangle {
+        visible: sRow.autoAvailable
+        Layout.preferredWidth: autoLabel.implicitWidth + Style.space(12)
+        Layout.preferredHeight: autoLabel.implicitHeight + Style.space(4)
+        radius: Math.min(height / 2, Style.cornerRadius)
+        color: sRow.isAuto ? Style.selectedFillFor(root.fg, Commons.Color.accent) : "transparent"
+        border.width: 1
+        border.color: sRow.isAuto ? Commons.Color.accent : Qt.rgba(root.fg.r, root.fg.g, root.fg.b, autoMouse.containsMouse ? 0.5 : 0.25)
+
+        Text {
+          id: autoLabel
+          anchors.centerIn: parent
+          textFormat: Text.PlainText
+          text: root.tr("label.auto", "Auto")
+          color: sRow.isAuto ? Commons.Color.accent : root.dimFg
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          font.bold: sRow.isAuto
+        }
+
+        MouseArea {
+          id: autoMouse
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: sRow.autoToggled()
+        }
+      }
+
+      Text {
+        Layout.preferredWidth: Style.space(sRow.autoAvailable ? 44 : 40)
+        horizontalAlignment: Text.AlignRight
+        textFormat: Text.PlainText
+        // With Auto on, the chip says so; the value is what Omarchy gives.
+        text: sRow.isAuto ? sRow.valueText.replace(/^.*·\s*/, "") : sRow.valueText
+        color: sRow.isAuto ? Commons.Color.accent : root.dimFg
+        font.family: Style.font.family
+        font.pixelSize: Style.font.caption
+        font.bold: true
+        elide: Text.ElideLeft
       }
     }
   }
@@ -1451,7 +1386,7 @@ Column {
           color: root.dimFg
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
+          elide: Text.ElideRight
         }
       }
 
@@ -1498,6 +1433,8 @@ Column {
     property string title: ""
     property string subtitle: ""
     property bool userSkin: false
+    // The Omarchy tile: drawn as Omarchy's own bar.
+    property bool standardTile: false
     readonly property bool chosen: root.chosenId() === cardId
     readonly property bool hot: cardHover.hovered || navFocused
     readonly property bool renaming: root.renamingId === cardId && userSkin
@@ -1506,7 +1443,7 @@ Column {
     navKey: "card:" + cardId
     navGrid: true
     navPreviewId: cardId
-    height: Style.space(58)
+    height: Style.space(52)
 
     onActivate: root.pickSkin(cardId)
     onRemove: if (userSkin) root.requestDelete(cardId, title)
@@ -1546,8 +1483,9 @@ Column {
 
       SkinThumbnail {
         width: parent.width
-        height: Style.space(24)
+        height: Style.space(22)
         skin: card.skinData
+        standard: card.standardTile
         paletteMap: root.palette
       }
 

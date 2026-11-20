@@ -10,10 +10,7 @@
   "screens.all": "Alle Bildschirme",
   "hint.screenSkin": "Höhe und Symbolfarbe folgen auf jedem Bildschirm dem Haupt-Skin.",
   "action.useMain": "Haupt-Skin verwenden",
-  "section.builtin": "Klassisch",
-  "section.wild": "Wild Craft",
   "section.user": "Deine Skins",
-  "hint.noUserSkins": "Speichere einen aus einem der anderen Tabs oder füge einen geteilten ein.",
   "card.theme": "Theme-Skin",
   "card.rename": "Umbenennen (R)",
   "card.delete": "Löschen (Entf)",
@@ -125,5 +122,6 @@
   "tab.geometry": "Geometrie",
   "tab.surface": "Oberfläche",
   "tab.behavior": "Verhalten",
-  "section.tone": "Ton"
+  "section.tone": "Ton",
+  "tile.standard": "Omarchy"
 }
