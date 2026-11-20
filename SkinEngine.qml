@@ -753,8 +753,7 @@ Item {
 
   Connections {
     target: Commons.Color
-    function onBackgroundChanged() { themeColorsView.reload() }
-    function onAccentChanged() { themeColorsView.reload() }
+    function onShellValuesChanged() { themeColorsView.reload() }
   }
 
   // ---- Omarchy integration: menu entries and the post-update check --------
@@ -955,11 +954,11 @@ Item {
 
   // A paste into a Studio field (LineField asks rather than reading the
   // clipboard itself): one line of text, read capped like every paste here.
-  property var _pasteField: null
+  property var _fieldPaste: null
 
   function pasteInto(field) {
-    if (!field || fieldPasteProc.running) return
-    _pasteField = field
+    if (!field || !field.takesPaste || field.readOnly || fieldPasteProc.running) return
+    _fieldPaste = { field: field, value: field.text, from: field.selectionStart, to: field.selectionEnd }
     fieldPasteProc.running = true
   }
 
@@ -969,13 +968,12 @@ Item {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var field = engine._pasteField
-        engine._pasteField = null
-        if (!field || !field.activeFocus) return
-        var clean = String(text || "").replace(/[\r\n\t\u2028\u2029]+/g, " ")
-        var room = Math.max(0, field.pasteLimit - field.length)
-        if (clean.length > room) clean = clean.slice(0, room)
-        if (clean) field.insert(field.cursorPosition, clean)
+        var request = engine._fieldPaste
+        engine._fieldPaste = null
+        var field = request ? request.field : null
+        if (!field || !field.activeFocus || field.text !== request.value
+            || field.selectionStart !== request.from || field.selectionEnd !== request.to) return
+        field.insertPastedText(text)
       }
     }
   }

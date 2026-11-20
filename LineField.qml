@@ -1,11 +1,7 @@
-// From thepixelgardener.omarchyform (MIT, same author), unchanged but for this
-// note. Barcraft's skin name and rename fields type through it, for the reason
-// below. A paste goes to the owner, which reads it capped (SkinEngine.pasteInto).
+// Adapted from thepixelgardener.omarchyform (MIT, same author).
+// Barcraft's skin name and rename fields use it, for the reason below.
 import QtQuick
 
-// One line to type into: the board's find field, the board browser's field and
-// the command list's query.
-//
 // A TextEdit held to one line rather than a TextInput, because of what Qt
 // 6.12.0's TextInput does whenever the clipboard changes. While it is editable,
 // QQuickTextInput::q_canPasteChanged asks the clipboard for its whole text
@@ -13,13 +9,10 @@ import QtQuick
 // pasting. On Wayland that text is read from whichever client owns the
 // clipboard for as long as it keeps sending, so an owner that never stops could
 // stall the shell or fill its memory just by changing the clipboard while a
-// field was open. TextEdit only asks which formats are on offer. Qt went back
-// to that check for TextInput after 6.12.0; tests/clipboard.js holds every
-// field here to zero reads either way.
+// field was open. TextEdit only asks which formats are on offer.
 //
 // Staying on one line is this item's job: Return, Enter and Tab never reach the
-// text, and a paste goes to the owner, which reads it through the clipboard
-// helper's 1 MiB limit (BoardExchange.pasteInto) without its newlines.
+// text, and a paste goes to SkinEngine.pasteInto for a bounded clipboard read.
 TextEdit {
   id: field
   textFormat: TextEdit.PlainText
@@ -31,12 +24,10 @@ TextEdit {
   width: Math.max(implicitWidth, parent ? parent.width : 0)
   x: Math.min(0, (parent ? parent.width : 0) - cursorRectangle.x - cursorRectangle.width)
 
-  // What BoardExchange.pasteInto reads. The owner says when a paste may land;
-  // the limit is the one TextInput's maximumLength gave these fields.
+  // The owner says when a paste may land.
   property bool takesPaste: false
   property int maximumLength: 32767
   readonly property int pasteLimit: Math.max(0, maximumLength)
-  readonly property bool pasteLines: false
 
   // Key filtering alone misses input-method commits and programmatic edits.
   // Keep the text on either side of an insertion when it exceeds the limit.
@@ -46,6 +37,18 @@ TextEdit {
     if (end > 0 && end < value.length && /[\uD800-\uDBFF]/.test(value[end - 1])
         && /[\uDC00-\uDFFF]/.test(value[end])) end--
     return value.slice(0, end)
+  }
+
+  function insertPastedText(value) {
+    if (!takesPaste || readOnly) return
+    var from = selectionStart
+    var to = selectionEnd
+    var room = pasteLimit - (length - (to - from))
+    var clean = boundedText(value.replace(/[\r\n\t\u2028\u2029]+/g, " "), room)
+    if (!clean) return
+    if (from !== to) remove(from, to)
+    insert(from, clean)
+    cursorPosition = from + clean.length
   }
   onTextChanged: {
     var next = field.text.replace(/\r\n|[\r\n\t\u2028\u2029]/g, " ")

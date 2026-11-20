@@ -140,9 +140,16 @@ Column {
 
   function setTab(tab) {
     if (activeTab === tab || tabs.indexOf(tab) < 0) return
+    if (textEditing) {
+      renamingId = ""
+      restoreKeys()
+    }
     activeTab = tab
+    navCurrent = tabRow
+    restoreKey = ""
     pendingPreview = ""
-    previewTimer.restart()
+    previewTimer.stop()
+    if (engine) engine.clearPreview()
     body.flickable.contentY = 0
   }
 
@@ -255,7 +262,12 @@ Column {
       var item = navItems[i]
       if (!item || !item.visible || !item.navEnabled || item.width <= 0 || item.height <= 0) continue
       var p = item.mapToItem(root, item.width / 2, item.height / 2)
-      out.push({ item: item, x: p.x, y: p.y })
+      // Compare rows in the full document. Scrolled-off rows otherwise
+      // overlap the pinned tabs and footer in window coordinates.
+      var scroll = body.flickable
+      var offset = item.inFooter ? Math.max(0, scroll.contentHeight - scroll.height)
+        : item === tabRow ? 0 : scroll.contentY
+      out.push({ item: item, x: p.x, y: p.y + offset })
     }
     out.sort(function(a, b) { return Math.abs(a.y - b.y) > 6 ? a.y - b.y : a.x - b.x })
     return out
@@ -264,8 +276,9 @@ Column {
   function setCurrent(item) {
     navCurrent = item
     if (!item) return
-    body.ensureVisible(item)
-    hoverPreview(item.navPreviewId, item.navPreviewId !== "")
+    if (item !== tabRow && !item.inFooter) body.ensureVisible(item)
+    pendingPreview = item.navPreviewId
+    previewTimer.restart()
   }
 
   function navMove(dx, dy) {
@@ -310,13 +323,13 @@ Column {
   }
 
   function navDelete() {
-    if (navCurrent) navCurrent.remove()
+    if (navCurrent && navCurrent.visible) navCurrent.remove()
   }
 
   function navText(t) {
     var n = parseInt(t, 10)
     if (n >= 1 && n <= tabs.length) { setTab(tabs[n - 1]); return }
-    if (navCurrent) navCurrent.textKey(t)
+    if (navCurrent && navCurrent.visible) navCurrent.textKey(t)
   }
 
   // The pointer moving takes the keyboard cursor away.
@@ -373,9 +386,12 @@ Column {
         root.tr("tab.surface", "Surface"),
         root.tr("tab.behavior", "Behavior")
       ]
-      currentIndex: Math.max(0, root.tabs.indexOf(root.activeTab))
+      // Tabs assigns currentIndex on pointer selection. A separate Binding
+      // keeps it synchronized across clicks, number shortcuts and IPC.
+      Binding on currentIndex { value: root.tabs.indexOf(root.activeTab) }
       cursorIndex: tabRow.navFocused ? currentIndex : -1
       activeFocusOnTab: false
+      onActiveFocusChanged: if (activeFocus) root.restoreKeys()
       onActivated: function(index) { root.setTab(root.tabs[index]) }
     }
   }
@@ -984,6 +1000,7 @@ Column {
       NavItem {
         id: nameNav
         navKey: "skinName"
+        inFooter: true
         Layout.fillWidth: true
         implicitHeight: Style.spacing.controlHeight
         Layout.preferredHeight: implicitHeight
@@ -1048,6 +1065,7 @@ Column {
 
       ActionButton {
         navKey: "save"
+        inFooter: true
         text: root.tr("action.save", "Save")
         selected: nameField.text.trim().length > 0
         onTriggered: root.saveSkin()
@@ -1060,6 +1078,7 @@ Column {
 
       ActionButton {
         navKey: "copy"
+        inFooter: true
         text: root.tr("action.copyToml", "Copy TOML")
         iconText: "󰆏"
         onTriggered: if (root.engine) root.engine.copyActiveToml()
@@ -1067,6 +1086,7 @@ Column {
 
       ActionButton {
         navKey: "paste"
+        inFooter: true
         text: root.tr("action.paste", "Paste skin")
         iconText: "󰆒"
         onTriggered: if (root.engine) root.engine.importFromClipboard()
@@ -1076,6 +1096,7 @@ Column {
 
       ActionButton {
         navKey: "reset"
+        inFooter: true
         text: root.tr("action.reset", "Reset")
         iconText: "󰜉"
         onTriggered: if (root.engine) root.engine.resetToPreset()
@@ -1144,8 +1165,9 @@ Column {
 
     property string navKey: ""
     property bool navEnabled: true
-    // Left/Right move between items (tiles) rather than adjust this one.
-    property bool navGrid: false
+    property bool inFooter: false
+    // Left/Right move between tiles or footer controls.
+    property bool navGrid: inFooter
     // A skin id to preview on the bar while the cursor rests here.
     property string navPreviewId: ""
     readonly property bool navFocused: root.keyboardMode && root.navCurrent === navItem
@@ -1471,28 +1493,32 @@ Column {
             active: card.renaming
             width: parent.width
             sourceComponent: Component {
-              LineField {
-                id: renameField
-                text: card.title
-                maximumLength: 40
-                takesPaste: true
-                color: root.fg
-                selectionColor: Style.selectionFillFor(root.fg, Kit.Color.accent)
-                font.family: Style.font.family
-                font.pixelSize: Style.font.caption
-                Component.onCompleted: {
-                  forceActiveFocus()
-                  selectAll()
-                }
-                onPasteRequested: if (root.engine) root.engine.pasteInto(renameField)
-                onActiveFocusChanged: if (!activeFocus) root.finishRename(card.cardId, text, false)
-                onKeyPressed: function(event) {
-                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                    event.accepted = true
-                    root.finishRename(card.cardId, text, true)
-                  } else if (event.key === Qt.Key_Escape) {
-                    event.accepted = true
-                    root.finishRename(card.cardId, text, false)
+              Item {
+                implicitHeight: renameField.implicitHeight
+
+                LineField {
+                  id: renameField
+                  text: card.title
+                  maximumLength: 40
+                  takesPaste: true
+                  color: root.fg
+                  selectionColor: Style.selectionFillFor(root.fg, Kit.Color.accent)
+                  font.family: Style.font.family
+                  font.pixelSize: Style.font.caption
+                  Component.onCompleted: {
+                    forceActiveFocus()
+                    selectAll()
+                  }
+                  onPasteRequested: if (root.engine) root.engine.pasteInto(renameField)
+                  onActiveFocusChanged: if (!activeFocus) root.finishRename(card.cardId, text, false)
+                  onKeyPressed: function(event) {
+                    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                      event.accepted = true
+                      root.finishRename(card.cardId, text, true)
+                    } else if (event.key === Qt.Key_Escape) {
+                      event.accepted = true
+                      root.finishRename(card.cardId, text, false)
+                    }
                   }
                 }
               }

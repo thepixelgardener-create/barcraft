@@ -43,7 +43,6 @@ Item {
   readonly property string themeDir: Quickshell.env("HOME") + "/.local/state/omarchy/current/theme"
   readonly property string configDir: (Quickshell.env("XDG_CONFIG_HOME") || (Quickshell.env("HOME") + "/.config")) + "/omarchy"
 
-  readonly property color shellBackground: theme.token(function() { return Commons.Color.background }, "#101315")
   readonly property int rounding: theme.style("cornerRadius", 0)
   // The kit halves Hyprland's gaps itself; the shell has already halved them.
   readonly property real gaps: theme.style("gapsOut", 5) * 2
@@ -58,11 +57,15 @@ Item {
   onResolvedFontChanged: theme.feed()
 
   // The current theme is a symlink, so a switch retargets it rather than
-  // editing a watched file. The shell recolors on every switch; follow it.
-  onShellBackgroundChanged: {
-    colorsFile.reload()
-    shellFile.reload()
-    nameFile.reload()
+  // editing a watched file. The shell replaces shellValues even when two
+  // themes share the same background and accent.
+  Connections {
+    target: Commons.Color
+    function onShellValuesChanged() {
+      colorsFile.reload()
+      shellFile.reload()
+      nameFile.reload()
+    }
   }
 
   function fileText(view) {

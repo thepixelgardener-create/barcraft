@@ -75,7 +75,7 @@ Column {
     val = max
   }
 
-  onCurrentValueChanged: syncHsvFromColor(shownColor)
+  onShownColorChanged: syncHsvFromColor(shownColor)
   Component.onCompleted: syncHsvFromColor(shownColor)
 
   readonly property var curatedSwatches: [
@@ -172,10 +172,14 @@ Column {
     O.SwatchStrip {
       required property var modelData
       colors: modelData.items.map(function(s) { return s.hex })
-      currentIndex: {
-        for (var i = 0; i < modelData.items.length; i++)
-          if (root.currentValue === "theme." + modelData.items[i].key) return i
-        return -1
+      // SwatchStrip writes currentIndex on a click. Keep the binding separate
+      // so subsequent changes to the active skin still update the selection.
+      Binding on currentIndex {
+        value: {
+          for (var i = 0; i < modelData.items.length; i++)
+            if (root.currentValue === "theme." + modelData.items[i].key) return i
+          return -1
+        }
       }
       foreground: root.foreground
       activeFocusOnTab: false
@@ -198,7 +202,9 @@ Column {
     O.SwatchStrip {
       required property var modelData
       colors: modelData.items
-      currentIndex: modelData.items.indexOf(root.currentValue)
+      Binding on currentIndex {
+        value: modelData.items.indexOf(root.currentValue)
+      }
       foreground: root.foreground
       activeFocusOnTab: false
       onPicked: function(index) { root.colorPicked(modelData.items[index]) }

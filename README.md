@@ -137,6 +137,7 @@ Skins from earlier Barcraft versions load unchanged: `art = "warcraft"` becomes 
 
 ```bash
 node tests/skinparser.test.js        # parser, TOML, shell.json state, menu block, icon tokens
+QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests
 omarchy plugin validate .
 omarchy agent look plugin .
 scripts/sync-upstream.sh --check     # has Omarchy's bar changed since the last sync?
