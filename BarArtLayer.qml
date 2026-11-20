@@ -2,11 +2,9 @@ import QtQuick
 import qs.Commons
 import qs.Commons as Commons
 
-// Expressive, animated art renderer for Wild Craft skins ("barber", "runeforge", "rocket").
-// Uses GPU-composited transforms for motion and preserves strong text contrast
-// behind all hosted bar widgets. Motion runs only while `motion` is true (the
-// bar turns it off under fullscreen, on battery, or off hover if so set) and
-// never with `omarchy toggle animations` off.
+// Art renderer for Wild Craft skins ("barber", "runeforge", "rocket"). Still
+// artwork: nothing here animates, so the bar never redraws on its own. Keeps
+// strong text contrast behind all hosted bar widgets.
 Item {
   id: root
 
@@ -17,14 +15,11 @@ Item {
   property real contrast: 1.0
   property bool vertical: false
   property real cornerRadius: Style.space(10)
-  // False holds the art still on its current frame.
-  property bool motion: true
 
   // Extra horizontal insets needed by shaped end-caps (e.g. rocket thruster & nosecone)
   readonly property int leftContentInset: art === "rocket" && !vertical ? Math.round(height * 1.45) : (art === "barber" && !vertical ? Math.round(height * 0.45) : (art === "runeforge" && !vertical ? Style.space(14) : 0))
   readonly property int rightContentInset: art === "rocket" && !vertical ? Math.round(height * 1.25) : (art === "barber" && !vertical ? Math.round(height * 0.45) : (art === "runeforge" && !vertical ? Style.space(14) : 0))
 
-  readonly property bool animationsEnabled: Style.duration(100) > 0 && motion
   readonly property bool useTintedPalette: themeTint || customBackground !== "" || customAccent !== ""
   readonly property color bg: customBackground !== "" ? Qt.color(customBackground) : Commons.Color.bar.background
   readonly property color fg: Commons.Color.bar.text
@@ -34,7 +29,7 @@ Item {
   visible: art !== "" && art !== "none"
 
   // =========================================================================
-  // 1. BARBER ROTOR — Rotating diagonal helix cylinder + chrome end caps
+  // 1. BARBER POLE — Diagonal helix cylinder + chrome end caps
   // =========================================================================
   Item {
     id: barberRoot
@@ -59,21 +54,12 @@ Item {
       color: "#161922"
       clip: true
 
-      // Repeating angled stripes shifted horizontally for seamless barber rotation
+      // Repeating angled stripes
       Item {
         id: stripeTrack
         readonly property real pitch: Math.max(36, Math.round(barberTube.height * 1.8))
-        property real phase: 0
 
-        NumberAnimation on phase {
-          running: barberRoot.visible && root.animationsEnabled
-          from: 0
-          to: stripeTrack.pitch
-          duration: 1800
-          loops: Animation.Infinite
-        }
-
-        x: -pitch * 2 + phase
+        x: -pitch * 2
         y: -barberTube.height
         width: barberTube.width + pitch * 5
         height: barberTube.height * 3
@@ -131,14 +117,15 @@ Item {
       // Smoked glass readability scrim + 3D cylindrical shading & top specular
       // Modulated by the Contrast slider so users can dial stripe punch vs legibility.
       Rectangle {
+        id: scrim
         anchors.fill: parent
         radius: parent.radius
         readonly property real scrimBias: Math.max(0.45, Math.min(1.25, 1.5 - root.contrast * 0.5))
         gradient: Gradient {
           GradientStop { position: 0.0; color: Qt.rgba(1, 1, 1, Math.min(0.45, 0.28 * root.contrast)) }
-          GradientStop { position: 0.16; color: Qt.rgba(0.05, 0.06, 0.09, Math.min(0.85, 0.52 * parent.scrimBias)) }
-          GradientStop { position: 0.55; color: Qt.rgba(0.04, 0.05, 0.08, Math.min(0.90, 0.68 * parent.scrimBias)) }
-          GradientStop { position: 0.88; color: Qt.rgba(0.02, 0.02, 0.04, Math.min(0.92, 0.78 * parent.scrimBias)) }
+          GradientStop { position: 0.16; color: Qt.rgba(0.05, 0.06, 0.09, Math.min(0.85, 0.52 * scrim.scrimBias)) }
+          GradientStop { position: 0.55; color: Qt.rgba(0.04, 0.05, 0.08, Math.min(0.90, 0.68 * scrim.scrimBias)) }
+          GradientStop { position: 0.88; color: Qt.rgba(0.02, 0.02, 0.04, Math.min(0.92, 0.78 * scrim.scrimBias)) }
           GradientStop { position: 1.0; color: Qt.rgba(0, 0, 0, 0.88) }
         }
       }
@@ -311,19 +298,13 @@ Item {
           border.width: 1
           border.color: runeRoot.goldBright
 
-          SequentialAnimation on opacity {
-            running: runeRoot.visible && root.animationsEnabled
-            loops: Animation.Infinite
-            NumberAnimation { from: 0.72; to: 1.0; duration: 1600; easing.type: Easing.InOutSine }
-            NumberAnimation { from: 1.0; to: 0.72; duration: 1600; easing.type: Easing.InOutSine }
-          }
         }
       }
     }
   }
 
   // =========================================================================
-  // 3. LONG ROCKET — Full-width horizontal spacecraft with animated exhaust
+  // 3. LONG ROCKET — Full-width horizontal spacecraft with exhaust plume
   // =========================================================================
   Item {
     id: rocketRoot
@@ -340,7 +321,7 @@ Item {
     readonly property color flameOuter: root.useTintedPalette ? root.acc : "#ff5e1a"
     readonly property color flameMid: root.useTintedPalette ? Qt.lighter(root.acc, 1.35) : "#ffbe2e"
 
-    // Animated thruster exhaust plume (left end)
+    // Thruster exhaust plume (left end)
     Item {
       id: thrusterPlume
       x: 0
@@ -348,21 +329,12 @@ Item {
       width: rocketRoot.flameW
       height: parent.height
 
-      property real flicker: 1.0
-      SequentialAnimation on flicker {
-        running: rocketRoot.visible && root.animationsEnabled
-        loops: Animation.Infinite
-        NumberAnimation { to: 0.78; duration: 95; easing.type: Easing.OutQuad }
-        NumberAnimation { to: 1.04; duration: 110; easing.type: Easing.InOutQuad }
-        NumberAnimation { to: 0.86; duration: 80; easing.type: Easing.OutQuad }
-        NumberAnimation { to: 1.0; duration: 105; easing.type: Easing.InOutQuad }
-      }
 
       // Outer orange/accent flame cone
       Rectangle {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        width: Math.max(6, parent.width * thrusterPlume.flicker)
+        width: Math.max(6, parent.width)
         height: Math.max(6, parent.height * 0.56)
         radius: height / 2
         gradient: Gradient {
@@ -377,7 +349,7 @@ Item {
       Rectangle {
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
-        width: Math.max(4, parent.width * 0.58 * thrusterPlume.flicker)
+        width: Math.max(4, parent.width * 0.58)
         height: Math.max(4, parent.height * 0.28)
         radius: height / 2
         gradient: Gradient {

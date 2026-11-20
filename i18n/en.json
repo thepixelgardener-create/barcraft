@@ -88,12 +88,6 @@
   "label.autohideDelay": "Hide after",
   "label.revealOnWorkspace": "Peek on workspace switch",
   "label.revealOnWorkspaceHint": "Shows the bar for a moment when you switch workspaces",
-  "label.artMotion": "Art motion",
-  "artMotion.always": "Always",
-  "artMotion.hover": "On hover",
-  "artMotion.off": "Off",
-  "label.pauseOnBattery": "Pause art on battery",
-  "label.pauseOnBatteryHint": "Holds Wild Craft art still while unplugged",
   "placeholder.skinName": "Save as skin name…",
   "action.save": "Save",
   "action.reset": "Reset",
@@ -114,7 +108,7 @@
   "skin.frosted": "Translucent glass bar with Hyprland blur behind it",
   "skin.capsule": "Rounded bar on a soft shadow with pill-shaped widgets",
   "skin.editorial": "Sharp 0px corners with a crisp 1px accent rule",
-  "skin.barber": "Rotating 3D barber pole cylinder with chrome caps",
+  "skin.barber": "3D barber pole cylinder with chrome caps",
   "skin.runeforge": "Forged obsidian stone, antique gold & glowing runes",
-  "skin.rocket": "Full-width spacecraft with live thruster & nosecone"
+  "skin.rocket": "Full-width spacecraft with thruster & nosecone"
 }

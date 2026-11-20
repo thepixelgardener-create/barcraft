@@ -12,7 +12,6 @@ var VALID_BORDERS = ["none", "subtle", "accent", "hyprland"]
 var VALID_VISIBILITY = ["always", "autohide"]
 var VALID_WIDGET_STYLES = ["plain", "pills", "chips"]
 var VALID_FILLS = ["solid", "gradient"]
-var VALID_MOTION = ["always", "hover", "off"]
 var VALID_AUTOHIDE_WHEN = ["always", "windows"]
 
 // Older names that still load.
@@ -131,8 +130,8 @@ function builtinSkins() {
       backgroundAlpha: 1.0, border: "accent", borderAlpha: 0.65
     }),
     preset({
-      id: "barber", name: "Barber Rotor", category: "wild", art: "barber",
-      description: "Rotating 3D barber pole cylinder with chrome caps",
+      id: "barber", name: "Barber Pole", category: "wild", art: "barber",
+      description: "3D barber pole cylinder with chrome caps",
       height: 32, sideMargin: 12, innerPadding: 12, radius: 16, backgroundAlpha: 0.96,
       border: "none", borderAlpha: 0.0, borderWidth: 0
     }),
@@ -144,7 +143,7 @@ function builtinSkins() {
     }),
     preset({
       id: "rocket", name: "Long Rocket", category: "wild", art: "rocket",
-      description: "Full-width spacecraft with live thruster & nosecone",
+      description: "Full-width spacecraft with thruster & nosecone",
       height: 34, sideMargin: 8, innerPadding: 12, radius: 0, backgroundAlpha: 0.96,
       border: "none", borderAlpha: 0.0, borderWidth: 0
     })
@@ -494,8 +493,6 @@ function serializeToml(skin) {
 
 function defaultPrefs() {
   return {
-    artMotion: "always",
-    pauseOnBattery: true,
     autohideDelay: 320,
     autohideWhen: "always",
     revealOnWorkspace: false
@@ -506,8 +503,6 @@ function normalizePrefs(raw) {
   var base = defaultPrefs()
   var p = raw && typeof raw === "object" ? raw : {}
   return {
-    artMotion: oneOf(p.artMotion, VALID_MOTION, base.artMotion),
-    pauseOnBattery: parseBool(p.pauseOnBattery, base.pauseOnBattery),
     autohideDelay: Math.round(clamp(p.autohideDelay, 100, 3000, base.autohideDelay)),
     autohideWhen: oneOf(p.autohideWhen, VALID_AUTOHIDE_WHEN, base.autohideWhen),
     revealOnWorkspace: parseBool(p.revealOnWorkspace, base.revealOnWorkspace)
@@ -527,8 +522,6 @@ function parseStateToml(text) {
     activeSkinId: main["active-skin"] !== undefined ? slugify(main["active-skin"]) : "floating",
     followTheme: parseBool(main["follow-theme"], true),
     prefs: normalizePrefs({
-      artMotion: main["art-motion"],
-      pauseOnBattery: main["pause-on-battery"],
       autohideDelay: main["autohide-delay"],
       autohideWhen: main["autohide-when"],
       revealOnWorkspace: main["reveal-on-workspace"]
@@ -551,8 +544,6 @@ function serializeStateToml(activeSkinId, followTheme, draft, prefs, monitors) {
     "[barcraft]",
     "active-skin         = \"" + slugify(activeSkinId) + "\"",
     "follow-theme        = " + (followTheme ? "true" : "false"),
-    "art-motion          = \"" + p.artMotion + "\"",
-    "pause-on-battery    = " + (p.pauseOnBattery ? "true" : "false"),
     "autohide-delay      = " + p.autohideDelay,
     "autohide-when       = \"" + p.autohideWhen + "\"",
     "reveal-on-workspace = " + (p.revealOnWorkspace ? "true" : "false"),

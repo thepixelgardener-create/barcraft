@@ -88,12 +88,6 @@
   "label.autohideDelay": "Ausblenden nach",
   "label.revealOnWorkspace": "Beim Arbeitsbereich-Wechsel zeigen",
   "label.revealOnWorkspaceHint": "Zeigt die Leiste kurz, wenn du den Arbeitsbereich wechselst",
-  "label.artMotion": "Bewegung der Kunst",
-  "artMotion.always": "Immer",
-  "artMotion.hover": "Beim Darüberfahren",
-  "artMotion.off": "Aus",
-  "label.pauseOnBattery": "Im Akkubetrieb anhalten",
-  "label.pauseOnBatteryHint": "Hält Wild-Craft-Kunst ohne Netzteil still",
   "placeholder.skinName": "Als Skin speichern…",
   "action.save": "Speichern",
   "action.reset": "Zurücksetzen",
@@ -114,7 +108,7 @@
   "skin.frosted": "Durchscheinende Glasleiste mit Hyprland-Unschärfe dahinter",
   "skin.capsule": "Abgerundete Leiste auf weichem Schatten mit Pillen-Widgets",
   "skin.editorial": "Scharfe 0px-Ecken mit klarer 1px-Akzentlinie",
-  "skin.barber": "Rotierender 3D-Barbierstab mit Chromkappen",
+  "skin.barber": "3D-Barbierstab mit Chromkappen",
   "skin.runeforge": "Geschmiedeter Obsidian, antikes Gold und leuchtende Runen",
   "skin.rocket": "Raumschiff über die volle Breite mit Triebwerk und Spitze"
 }

@@ -1,7 +1,6 @@
 import Quickshell
 import Quickshell.Hyprland
 import Quickshell.Io
-import Quickshell.Services.UPower
 import Quickshell.Wayland
 import QtQuick
 import QtQuick.Effects
@@ -1776,15 +1775,6 @@ Item {
 
     readonly property bool effectivelyHidden: root.barHidden || (pskin.autoHide && hideAllowed && !autoHideRevealed && !dragActive && !root.activePopout)
 
-    // Wild Craft art moves only while it's worth the redraws: never under a
-    // fullscreen window, not on battery unless asked, and on hover if set so.
-    readonly property bool artMotion: {
-      if (underFullscreen || effectivelyHidden) return false
-      if (skin.prefs.pauseOnBattery && UPower.onBattery) return false
-      var m = skin.prefs.artMotion
-      return m === "always" || (m === "hover" && stripHover.hovered)
-    }
-
     // An explicit zone instead of Auto: the reserved area stays the strip's
     // thickness + floating edge gap, or 0 while auto-hide is on.
     exclusionMode: (root.barHidden || zone.autoHide) ? ExclusionMode.Ignore : ExclusionMode.Normal
@@ -1960,7 +1950,7 @@ Item {
         look: pskin
       }
 
-      // Expressive / animated art layer (Barber Rotor, Runeforge, Long Rocket)
+      // Wild Craft art layer (Barber Pole, Runeforge, Long Rocket)
       BarArtLayer {
         id: artLayer
         anchors.fill: parent
@@ -1971,7 +1961,6 @@ Item {
         contrast: pskin.contrast
         vertical: root.vertical
         cornerRadius: Style.space(pskin.radius)
-        motion: barWindow.artMotion
       }
 
       Loader {

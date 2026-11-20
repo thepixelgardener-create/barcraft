@@ -946,26 +946,6 @@ Column {
             checked: root.engine ? root.engine.prefs.revealOnWorkspace : false
             onToggled: root.engine.setPref("revealOnWorkspace", !root.engine.prefs.revealOnWorkspace)
           }
-
-          ChoiceRow {
-            navKey: "artMotion"
-            label: root.tr("label.artMotion", "Art motion")
-            value: root.engine ? root.engine.prefs.artMotion : "always"
-            options: [
-              { value: "always", label: root.tr("artMotion.always", "Always") },
-              { value: "hover", label: root.tr("artMotion.hover", "On hover") },
-              { value: "off", label: root.tr("artMotion.off", "Off") }
-            ]
-            onPicked: function(v) { root.engine.setPref("artMotion", v) }
-          }
-
-          ToggleRow {
-            navKey: "pauseOnBattery"
-            label: root.tr("label.pauseOnBattery", "Pause art on battery")
-            hint: root.tr("label.pauseOnBatteryHint", "")
-            checked: root.engine ? root.engine.prefs.pauseOnBattery : true
-            onToggled: root.engine.setPref("pauseOnBattery", !root.engine.prefs.pauseOnBattery)
-          }
         }
       }
     }
@@ -1397,7 +1377,6 @@ Column {
         height: card.wide ? Style.space(20) : Style.space(34)
         skin: card.skinData
         paletteMap: root.palette
-        motion: card.hot && !!root.engine && root.engine.prefs.artMotion !== "off"
       }
 
       RowLayout {

@@ -94,12 +94,12 @@ test("no [bar-skin] in shell values means no theme skin", () => {
 test("state file: prefs, monitors and draft round-trip", () => {
   const draft = P.normalizeSkin({ id: "d", name: "Draft's" }, "d", "custom")
   const text = P.serializeStateToml("islands", false, draft,
-    { artMotion: "hover", pauseOnBattery: false, autohideDelay: 900, autohideWhen: "windows", revealOnWorkspace: true },
+    { autohideDelay: 900, autohideWhen: "windows", revealOnWorkspace: true },
     { "HDMI-A-1": "frosted", "eDP-1": "theme", "bad name!": "x" })
   const st = P.parseStateToml(text)
   assert.strictEqual(st.activeSkinId, "islands")
   assert.strictEqual(st.followTheme, false)
-  assert.deepStrictEqual(st.prefs, { artMotion: "hover", pauseOnBattery: false, autohideDelay: 900, autohideWhen: "windows", revealOnWorkspace: true })
+  assert.deepStrictEqual(st.prefs, { autohideDelay: 900, autohideWhen: "windows", revealOnWorkspace: true })
   assert.deepStrictEqual(st.monitors, { "HDMI-A-1": "frosted", "eDP-1": "theme" })
   assert.strictEqual(P.parseToml(text, "islands", "custom").name, "Draft's")
 })
@@ -110,8 +110,8 @@ test("state file without a draft has no skin in it", () => {
 })
 
 test("prefs are clamped and validated", () => {
-  const p = P.normalizePrefs({ artMotion: "warp", autohideDelay: 99999 })
-  assert.strictEqual(p.artMotion, "always")
+  const p = P.normalizePrefs({ autohideWhen: "warp", autohideDelay: 99999 })
+  assert.strictEqual(p.autohideWhen, "always")
   assert.strictEqual(p.autohideDelay, 3000)
 })
 
@@ -142,6 +142,16 @@ test("theme colors parse with every key mapped", () => {
   const text = "accent = \"#7aa2f7\"\nblue = \"#7aa2f7\"\nbackground = '1a1b26'\n"
   assert.deepStrictEqual(P.themeColorMap(text), { accent: "#7aa2f7", blue: "#7aa2f7", background: "#1a1b26" })
   assert.strictEqual(P.parseThemeColorsToml(text).length, 2)
+})
+
+test("old motion prefs in a state file are ignored", () => {
+  const st = P.parseStateToml("[barcraft]\nart-motion = \"always\"\npause-on-battery = true\n")
+  assert.deepStrictEqual(Object.keys(st.prefs).sort(), ["autohideDelay", "autohideWhen", "revealOnWorkspace"])
+  assert.ok(!/art-motion|pause-on-battery/.test(P.serializeStateToml("floating", true, null, st.prefs, null)))
+})
+
+test("built-in skins promise no motion", () => {
+  for (const s of P.builtinSkins()) assert.ok(!/rotat|live|animat/i.test(s.name + " " + s.description), s.id)
 })
 
 console.log("SkinParser: " + passed + " tests passed")

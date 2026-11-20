@@ -11,7 +11,6 @@ Item {
 
   property var skin: null
   property var paletteMap: ({})
-  property bool motion: false
   property bool highlighted: false
 
   readonly property real k: 0.42
@@ -130,7 +129,6 @@ Item {
       customAccent: tl.customAccentHex
       contrast: tl.contrast
       cornerRadius: thumb.barRadius
-      motion: thumb.motion
     }
 
     MiniSurface {
