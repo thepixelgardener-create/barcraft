@@ -2,6 +2,10 @@
 
 # Barcraft
 
+[![CI](https://github.com/thepixelgardener-create/barcraft/actions/workflows/ci.yml/badge.svg)](https://github.com/thepixelgardener-create/barcraft/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/thepixelgardener-create/barcraft)](https://github.com/thepixelgardener-create/barcraft/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 **The skinnable bar for Omarchy.**
 
 Barcraft (`thepixelgardener.barcraft`) is Omarchy's own bar with a skin engine on top. It hosts every built-in and third-party `bar-widget`, popup, tooltip, drag-and-drop reordering and multi-monitor layout unchanged, and it is built from Omarchy's own foundation: its settings live in `shell.json`, its presets follow the theme and Hyprland, and it shows up in Omarchy's menu, OSD and update hooks.
@@ -52,6 +56,8 @@ Barcraft (`thepixelgardener.barcraft`) is Omarchy's own bar with a skin engine o
 
 ## Install
 
+Requires **Omarchy 4 (Quattro)** with the Quickshell bar.
+
 ```bash
 omarchy plugin add https://github.com/thepixelgardener-create/barcraft --enable
 omarchy bar use thepixelgardener.barcraft
@@ -59,6 +65,13 @@ omarchy bar put thepixelgardener.barcraft --section right
 ```
 
 From a local checkout instead: `ln -s "$PWD" ~/.config/omarchy/plugins/thepixelgardener.barcraft`, then `omarchy-shell shell rescanPlugins` and the two `omarchy bar` lines.
+
+To switch back to Omarchy's built-in bar (or remove Barcraft completely):
+
+```bash
+omarchy bar use omarchy.bar
+omarchy plugin remove thepixelgardener.barcraft
+```
 
 ## Keybindings and IPC
 
@@ -177,3 +190,7 @@ The widget finds the bar's engine by walking up to the bar strip it sits in (`ba
 | `BarWidget.qml`, `StudioContent.qml` | The widget and the Studio keyboard panel |
 | `BarcraftMark.qml`, `SkinThumbnail.qml`, `ColorPickerField.qml`, `BarArtLayer.qml`, `BarBezelOverlay.qml` | Building blocks |
 | `kit/`, `KitTheme.qml`, `LineField.qml`, `tools/vendor-kit.js` | The Omarchy UI kit, its theme bridge, the safe text field, and the vendoring script |
+
+## License
+
+MIT — see [LICENSE](LICENSE) and [CHANGELOG.md](CHANGELOG.md). Built on Omarchy's bar and [omacom/omarchy-ui](https://github.com/omacom/omarchy-ui) (both MIT).
