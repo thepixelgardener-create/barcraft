@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "id": "thepixelgardener.barcraft",
+  "name": "Barcraft",
+  "version": "0.2.0",
+  "author": "frueh",
+  "license": "MIT",
+  "description": "Skinnable Omarchy bar: 8 skins, a keyboard-driven live Studio, per-monitor skins, theme-aware colors, and native shell.toml [bar-skin] support.",
+  "keywords": [
+    "bar",
+    "skins",
+    "themes",
+    "floating",
+    "islands",
+    "autohide",
+    "per-monitor",
+    "keyboard"
+  ],
+  "kinds": [
+    "bar",
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "bar": "Bar.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Barcraft",
+    "description": "Open Barcraft Studio to preview, craft, save and share bar skins.",
+    "category": "Appearance",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
