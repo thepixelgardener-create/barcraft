@@ -5,12 +5,13 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 
-// Barcraft Studio. Skins: pick, preview on hover or under the cursor, give a
-// screen its own skin, manage saved skins. Craft: every skin field, the
-// preferences that hold for all skins, save and share.
+// Barcraft Studio, in tabs. Skins: pick, preview on hover or under the
+// cursor, give a screen its own skin, manage saved skins. Colors, Geometry,
+// Surface and Behavior: every skin field, grouped, plus the preferences that
+// hold for all skins; save and share below them.
 //
 // Keyboard: arrows or hjkl move the cursor, Left/Right adjust the row under
-// it, Return or Space activates, 1 and 2 switch tabs, R renames and Delete
+// it, Return or Space activates, 1-5 pick a tab, R renames and Delete
 // removes a saved skin, Esc closes, Tab moves to the next panel on the bar.
 Column {
   id: root
@@ -125,12 +126,20 @@ Column {
     previewTimer.restart()
   }
 
+  readonly property var tabs: ["presets", "colors", "geometry", "surface", "behavior"]
+  readonly property bool craftTab: activeTab !== "presets"
+
   function setTab(tab) {
-    if (activeTab === tab) return
+    if (activeTab === tab || tabs.indexOf(tab) < 0) return
     activeTab = tab
     pendingPreview = ""
     previewTimer.restart()
     body.contentY = 0
+  }
+
+  function stepTab(direction) {
+    var i = tabs.indexOf(activeTab)
+    setTab(tabs[(i + direction + tabs.length) % tabs.length])
   }
 
   // ---- Choosing and managing skins -------------------------------------------
@@ -286,8 +295,8 @@ Column {
   }
 
   function navText(t) {
-    if (t === "1") { setTab("presets"); return }
-    if (t === "2") { setTab("craft"); return }
+    var n = parseInt(t, 10)
+    if (n >= 1 && n <= tabs.length) { setTab(tabs[n - 1]); return }
     if (navCurrent) navCurrent.textKey(t)
   }
 
@@ -338,28 +347,32 @@ Column {
         ink: root.fg
       }
     }
-    trailingControl: Component {
-      NavItem {
-        navKey: "tabs"
-        implicitWidth: tabGroup.implicitWidth
-        implicitHeight: tabGroup.implicitHeight
-        width: implicitWidth
-        height: implicitHeight
-        onAdjust: function(direction) { root.setTab(root.activeTab === "presets" ? "craft" : "presets") }
-        onActivate: root.setTab(root.activeTab === "presets" ? "craft" : "presets")
+  }
 
-        ButtonGroup {
-          id: tabGroup
-          focusable: false
-          foreground: root.fg
-          value: root.activeTab
-          options: [
-            { value: "presets", label: root.tr("tab.presets", "Skins") },
-            { value: "craft", label: root.tr("tab.craft", "Craft") }
-          ]
-          onChanged: function(v) { root.setTab(v) }
-        }
-      }
+  // The tabs, a row of their own: five don't fit beside the title.
+  NavItem {
+    id: tabRow
+    navKey: "tabs"
+    width: parent.width
+    implicitHeight: tabGroup.implicitHeight
+    height: implicitHeight
+    onAdjust: function(direction) { root.stepTab(direction) }
+    onActivate: root.stepTab(1)
+
+    ButtonGroup {
+      id: tabGroup
+      focusable: false
+      foreground: root.fg
+      fontSize: Style.font.bodySmall
+      value: root.activeTab
+      options: [
+        { value: "presets", label: root.tr("tab.presets", "Skins") },
+        { value: "colors", label: root.tr("tab.colors", "Colors") },
+        { value: "geometry", label: root.tr("tab.geometry", "Geometry") },
+        { value: "surface", label: root.tr("tab.surface", "Surface") },
+        { value: "behavior", label: root.tr("tab.behavior", "Behavior") }
+      ]
+      onChanged: function(v) { root.setTab(v) }
     }
   }
 
@@ -373,7 +386,7 @@ Column {
 
   Flickable {
     id: body
-    readonly property real chrome: hero.height + heroSeparator.height
+    readonly property real chrome: hero.height + tabRow.height + root.spacing + heroSeparator.height
       + (footer.visible ? footer.implicitHeight + root.spacing : 0)
       + (statusText.visible ? statusText.implicitHeight + root.spacing : 0)
       + (keysHint.visible ? keysHint.implicitHeight + root.spacing : 0)
@@ -597,63 +610,20 @@ Column {
       }
 
       // ======================================================================
-      // CRAFT
+      // CRAFT TABS
       // ======================================================================
+      // COLORS: fill, what to paint, the picker
       Column {
         width: parent.width
         spacing: Style.spacing.panelGap
-        visible: root.activeTab === "craft" && !!root.engine
+        visible: root.activeTab === "colors" && !!root.engine
 
-        HintText {
-          width: parent.width
-          visible: !!root.engine && root.engine.standard
-          color: Commons.Color.accent
-          text: root.tr("hint.standardCraft", "")
-        }
+        StandardHint {}
 
         Section {
           separated: false
-          title: root.tr("section.mode", "Architecture")
-
-          ChoiceRow {
-            navKey: "mode"
-            value: root.engine ? root.engine.mode : "floating"
-            options: [
-              { value: "edge", label: root.tr("mode.edge", "Edge") },
-              { value: "floating", label: root.tr("mode.floating", "Floating") },
-              { value: "islands", label: root.tr("mode.islands", "Islands") }
-            ]
-            onPicked: function(v) { root.engine.updateField("mode", v) }
-          }
-        }
-
-        Section {
-          title: root.tr("section.art", "Craft Art")
-
-          ChoiceRow {
-            navKey: "art"
-            value: root.engine ? root.engine.art : "none"
-            options: [
-              { value: "none", label: root.tr("art.none", "Clean") },
-              { value: "barber", label: root.tr("art.barber", "Barber") },
-              { value: "runeforge", label: root.tr("art.runeforge", "Runeforge") },
-              { value: "rocket", label: root.tr("art.rocket", "Rocket") }
-            ]
-            onPicked: function(v) { root.engine.updateField("art", v) }
-          }
-
-          ToggleRow {
-            navKey: "themeTint"
-            visible: !!root.engine && root.engine.hasArt
-            label: root.tr("label.themeTint", "Tint art with theme")
-            hint: root.tr("label.themeTintHint", "")
-            checked: root.engine ? root.engine.themeTint : false
-            onToggled: root.engine.updateField("themeTint", !root.engine.themeTint)
-          }
-        }
-
-        Section {
-          title: root.tr("section.color", "Colors")
+          // The tab already says it.
+          title: ""
 
           ChoiceRow {
             navKey: "fill"
@@ -728,34 +698,29 @@ Column {
             }
           }
         }
+      }
+
+      // GEOMETRY: architecture, size, gaps, width, corners, icons
+      Column {
+        width: parent.width
+        spacing: Style.spacing.panelGap
+        visible: root.activeTab === "geometry" && !!root.engine
+
+        StandardHint {}
 
         Section {
-          title: root.tr("section.bezel", "Bezel")
+          separated: false
+          title: root.tr("section.mode", "Architecture")
 
           ChoiceRow {
-            navKey: "bezel"
-            value: root.engine ? root.engine.bezel : "none"
+            navKey: "mode"
+            value: root.engine ? root.engine.mode : "floating"
             options: [
-              { value: "none", label: root.tr("bezel.none", "Flat") },
-              { value: "raised", label: root.tr("bezel.raised", "Raised") },
-              { value: "inset", label: root.tr("bezel.inset", "Inset") },
-              { value: "ridge", label: root.tr("bezel.ridge", "Ridge") },
-              { value: "glass", label: root.tr("bezel.glass", "Glass") }
+              { value: "edge", label: root.tr("mode.edge", "Edge") },
+              { value: "floating", label: root.tr("mode.floating", "Floating") },
+              { value: "islands", label: root.tr("mode.islands", "Islands") }
             ]
-            onPicked: function(v) { root.engine.updateField("bezel", v) }
-          }
-
-          SliderRow {
-            navKey: "bezelStrength"
-            visible: !!root.engine && root.engine.bezel !== "none"
-            label: root.tr("label.bezelStrength", "Bezel depth")
-            valueText: root.percent(root.engine ? root.engine.bezelStrength : 0.75)
-            minimum: 0.2
-            maximum: 1.0
-            step: 0.05
-            integer: false
-            value: root.engine ? root.engine.bezelStrength : 0.75
-            onChangedValue: function(v) { root.engine.updateField("bezelStrength", v) }
+            onPicked: function(v) { root.engine.updateField("mode", v) }
           }
         }
 
@@ -849,9 +814,19 @@ Column {
             onChangedValue: function(v) { root.engine.updateField("iconScale", v) }
           }
         }
+      }
+
+      // SURFACE: opacity, depth, contrast, border, widgets, shadow, blur, bezel, art
+      Column {
+        width: parent.width
+        spacing: Style.spacing.panelGap
+        visible: root.activeTab === "surface" && !!root.engine
+
+        StandardHint {}
 
         Section {
-          title: root.tr("section.surface", "Surface")
+          separated: false
+          title: ""
 
           SliderRow {
             navKey: "opacity"
@@ -952,7 +927,72 @@ Column {
         }
 
         Section {
-          title: root.tr("section.behavior", "Behavior")
+          title: root.tr("section.bezel", "Bezel")
+
+          ChoiceRow {
+            navKey: "bezel"
+            value: root.engine ? root.engine.bezel : "none"
+            options: [
+              { value: "none", label: root.tr("bezel.none", "Flat") },
+              { value: "raised", label: root.tr("bezel.raised", "Raised") },
+              { value: "inset", label: root.tr("bezel.inset", "Inset") },
+              { value: "ridge", label: root.tr("bezel.ridge", "Ridge") },
+              { value: "glass", label: root.tr("bezel.glass", "Glass") }
+            ]
+            onPicked: function(v) { root.engine.updateField("bezel", v) }
+          }
+
+          SliderRow {
+            navKey: "bezelStrength"
+            visible: !!root.engine && root.engine.bezel !== "none"
+            label: root.tr("label.bezelStrength", "Bezel depth")
+            valueText: root.percent(root.engine ? root.engine.bezelStrength : 0.75)
+            minimum: 0.2
+            maximum: 1.0
+            step: 0.05
+            integer: false
+            value: root.engine ? root.engine.bezelStrength : 0.75
+            onChangedValue: function(v) { root.engine.updateField("bezelStrength", v) }
+          }
+        }
+
+        Section {
+          title: root.tr("section.art", "Craft Art")
+
+          ChoiceRow {
+            navKey: "art"
+            value: root.engine ? root.engine.art : "none"
+            options: [
+              { value: "none", label: root.tr("art.none", "Clean") },
+              { value: "barber", label: root.tr("art.barber", "Barber") },
+              { value: "runeforge", label: root.tr("art.runeforge", "Runeforge") },
+              { value: "rocket", label: root.tr("art.rocket", "Rocket") }
+            ]
+            onPicked: function(v) { root.engine.updateField("art", v) }
+          }
+
+          ToggleRow {
+            navKey: "themeTint"
+            visible: !!root.engine && root.engine.hasArt
+            label: root.tr("label.themeTint", "Tint art with theme")
+            hint: root.tr("label.themeTintHint", "")
+            checked: root.engine ? root.engine.themeTint : false
+            onToggled: root.engine.updateField("themeTint", !root.engine.themeTint)
+          }
+        }
+      }
+
+      // BEHAVIOR: auto-hide, and how Barcraft joins Omarchy
+      Column {
+        width: parent.width
+        spacing: Style.spacing.panelGap
+        visible: root.activeTab === "behavior" && !!root.engine
+
+        StandardHint {}
+
+        Section {
+          separated: false
+          title: ""
 
           ToggleRow {
             navKey: "autoHide"
@@ -1030,7 +1070,7 @@ Column {
     id: footer
     width: parent.width
     spacing: Style.spacing.md
-    visible: root.activeTab === "craft" && !!root.engine
+    visible: root.craftTab && !!root.engine
 
     PanelSeparator {
       width: parent.width
@@ -1187,9 +1227,22 @@ Column {
     }
 
     PanelSectionHeader {
+      visible: parent.title !== ""
       foreground: root.fg
       text: parent.title
     }
+  }
+
+  // Shown on the editing tabs while Omarchy standard is on.
+  component StandardHint: Text {
+    width: parent ? parent.width : 0
+    visible: !!root.engine && root.engine.standard
+    textFormat: Text.PlainText
+    color: Commons.Color.accent
+    font.family: Style.font.family
+    font.pixelSize: Style.font.caption
+    wrapMode: Text.WordWrap
+    text: root.tr("hint.standardCraft", "")
   }
 
   component HintText: Text {
