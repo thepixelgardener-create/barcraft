@@ -191,6 +191,29 @@ test("classic presets follow Omarchy; art presets keep their own geometry", () =
   assert.ok(!byId.rocket && !byId.barber)
 })
 
+test("preset #8 statusline is a compact high-contrast developer preset", () => {
+  const list = P.builtinSkins()
+  assert.strictEqual(list.length, 8)
+  const dev = list[7]
+  assert.strictEqual(dev.id, "statusline")
+  assert.strictEqual(dev.name, "Statusline")
+  assert.strictEqual(dev.category, "classic")
+  assert.strictEqual(dev.mode, "edge")
+  assert.strictEqual(dev.height, 26)
+  assert.strictEqual(dev.radius, 0)
+  assert.strictEqual(dev.widgetStyle, "chips")
+  assert.strictEqual(dev.border, "subtle")
+  assert.strictEqual(dev.iconScale, 1.0)
+  assert.strictEqual(dev.art, "none")
+
+  const lookup = id => list.find(s => s.id === id) || null
+  const custom = P.parseToml("[bar-skin]\npreset = \"statusline\"\ncontrast = 1.25\n", "dev", "user", lookup)
+  assert.strictEqual(custom.mode, "edge")
+  assert.strictEqual(custom.widgetStyle, "chips")
+  assert.strictEqual(custom.height, 26)
+  assert.strictEqual(custom.contrast, 1.25)
+})
+
 test("width is a clamped percentage and opacity may reach zero", () => {
   assert.strictEqual(P.normalizeSkin({ width: 10 }, "w").width, 30)
   assert.strictEqual(P.normalizeSkin({ width: 80 }, "w").width, 80)

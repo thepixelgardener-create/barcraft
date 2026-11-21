@@ -193,6 +193,14 @@ function builtinSkins() {
       height: 32, edgeMargin: 6, sideMargin: 10, innerPadding: 14, radius: 0,
       backgroundAlpha: 0.98,
       border: "none", borderAlpha: 0.0, borderWidth: 0
+    }),
+    preset({
+      id: "statusline", name: "Statusline", category: "classic", mode: "edge",
+      description: "Compact high-contrast developer statusline with outlined widget chips",
+      height: 26, edgeMargin: 0, sideMargin: 0, sectionGap: 6, innerPadding: 6, radius: 0,
+      backgroundAlpha: 0.98, surfaceTone: 1.15, contrast: 1.18,
+      border: "subtle", borderAlpha: 0.28, borderWidth: 1,
+      widgetStyle: "chips"
     })
   ]
 }
@@ -541,7 +549,7 @@ function tomlNumberOrAuto(value, fixed) {
 function serializeToml(skin) {
   var s = normalizeSkin(skin, skin ? skin.id : "custom", "user")
   var lines = [
-    "# Barcraft skin. Works as ~/.config/omarchy/bar-skins/<name>.toml or as the",
+    "# Barcraft skin. Works as ~/.config/omarchy/bar/skins/<name>.toml or as the",
     "# [bar-skin] section of a theme's shell.toml.",
     "[bar-skin]",
     "name             = " + tomlString(s.name),

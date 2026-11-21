@@ -5,6 +5,18 @@ All notable changes to Barcraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-11-21
+
+### Added
+
+- **Preset #8 — `Statusline`**: a compact (26px), edge-to-edge, high-contrast developer statusline preset with outlined `chips` widgets and a subtle 1px divider rule that adapts live to any Omarchy theme.
+- **Skin authoring documentation** (`docs/skins.md`) and full reference (`docs/reference.md`), keeping the root `README.md` concise and easy to scan.
+- **Marketplace root preview** (`preview.webp`) for `plugins.omarchy.org`.
+
+### Changed
+
+- Updated the saved-skin path notice and TOML header comment to `~/.config/omarchy/bar/skins/<name>.toml`.
+
 ## [0.4.0] - 2026-11-20
 
 Initial public release of Barcraft (`thepixelgardener.barcraft`) for Omarchy.
