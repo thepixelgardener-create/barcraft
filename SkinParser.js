@@ -45,15 +45,30 @@ var ICON_TOKENS = [
 ]
 var OWNED_MARKER = "# barcraft"
 var HOOK_OWNED_MARKER = "# Added by Barcraft (thepixelgardener.barcraft)."
+var HOOK_DIGEST_PREFIX = "# barcraft-digest: "
+var HOOK_HEAD = "#!/bin/bash\n" + HOOK_OWNED_MARKER + "\n" + HOOK_DIGEST_PREFIX
 
-function isOwnedUpdateHook(text) {
-  var lines = String(text || "").split("\n")
-  var limit = Math.min(lines.length, 6)
-  for (var i = 0; i < limit; i++) {
-    var trimmed = lines[i].trim()
-    if (trimmed === HOOK_OWNED_MARKER || trimmed.indexOf(HOOK_OWNED_MARKER + " ") === 0) return true
+// The post-update hook Barcraft writes: a fixed header, then a digest line
+// holding the MD5 of everything after it. `md5` is Qt.md5 in the shell (a
+// stand-in in the tests): the hex MD5 of the text's UTF-8 bytes.
+function stampUpdateHook(body, md5) {
+  var rest = String(body === undefined || body === null ? "" : body)
+  return HOOK_HEAD + md5(rest) + "\n" + rest
+}
+
+// True only for a hook Barcraft wrote and nobody has changed since. The header
+// alone proves nothing (an edited copy keeps it), so the digest has to match
+// the rest of the file. Hooks from 0.5.0 and 0.5.1 carry no digest: they count
+// only when they equal one of `legacy` exactly, which is what those versions
+// would have written in this place.
+function isPristineUpdateHook(text, md5, legacy) {
+  var s = String(text === undefined || text === null ? "" : text)
+  if (s.indexOf(HOOK_HEAD) === 0) {
+    var rest = s.slice(HOOK_HEAD.length)
+    var digest = rest.slice(0, 32)
+    return /^[0-9a-f]{32}$/.test(digest) && rest.charAt(32) === "\n" && md5(rest.slice(33)) === digest
   }
-  return false
+  return Array.isArray(legacy) && s !== "" && legacy.indexOf(s) !== -1
 }
 
 // Picks a target filename slug when saving a user skin:
@@ -1082,7 +1097,8 @@ if (typeof module !== "undefined") {
     sanitizeLabel: sanitizeLabel,
     neutralizeMarkup: neutralizeMarkup,
     isSafeSkinPath: isSafeSkinPath,
-    isOwnedUpdateHook: isOwnedUpdateHook,
+    stampUpdateHook: stampUpdateHook,
+    isPristineUpdateHook: isPristineUpdateHook,
     resolveSaveTarget: resolveSaveTarget,
     HOOK_OWNED_MARKER: HOOK_OWNED_MARKER
   }

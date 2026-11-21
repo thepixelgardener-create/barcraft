@@ -166,15 +166,27 @@ test("icon overrides keep [bar] header when user added keys under Barcraft's [ba
   )
 })
 
-test("isOwnedUpdateHook recognizes only Barcraft-created hook scripts", () => {
-  const owned = "#!/bin/bash\n" + P.HOOK_OWNED_MARKER + "\n# note\necho hi\n"
-  const legacyOwned = "#!/bin/bash\n# Added by Barcraft (thepixelgardener.barcraft). Turn off to remove.\necho hi\n"
-  const userOwned = "#!/bin/bash\n# My personal barcraft-sync hook\necho custom\n"
-  const empty = ""
-  assert.strictEqual(P.isOwnedUpdateHook(owned), true)
-  assert.strictEqual(P.isOwnedUpdateHook(legacyOwned), true)
-  assert.strictEqual(P.isOwnedUpdateHook(userOwned), false)
-  assert.strictEqual(P.isOwnedUpdateHook(empty), false)
+test("isPristineUpdateHook accepts only an unedited Barcraft hook", () => {
+  const md5 = text => require("crypto").createHash("md5").update(text, "utf8").digest("hex")
+  const body = "plugin='/p'\nomarchy-notification-send -g '󰍜' Barcraft 'Grüße'\n"
+  const hook = P.stampUpdateHook(body, md5)
+  assert.ok(hook.startsWith("#!/bin/bash\n" + P.HOOK_OWNED_MARKER + "\n# barcraft-digest: "))
+  assert.strictEqual(P.isPristineUpdateHook(hook, md5, []), true)
+
+  // Edited after Barcraft wrote it, header kept: no longer Barcraft's.
+  assert.strictEqual(P.isPristineUpdateHook(hook + "echo mine\n", md5, []), false)
+  assert.strictEqual(P.isPristineUpdateHook(hook.replace("Grüße", "Hallo"), md5, []), false)
+  // A header copied into someone else's script proves nothing.
+  const copied = "#!/bin/bash\n" + P.HOOK_OWNED_MARKER + "\n# barcraft-digest: " + "0".repeat(32) + "\necho custom\n"
+  assert.strictEqual(P.isPristineUpdateHook(copied, md5, []), false)
+  assert.strictEqual(P.isPristineUpdateHook("#!/bin/bash\n" + P.HOOK_OWNED_MARKER + "\necho hi\n", md5, []), false)
+
+  // Hooks from 0.5.0/0.5.1 have no digest: only an exact match counts.
+  const legacy = "#!/bin/bash\n" + P.HOOK_OWNED_MARKER + "\n# Turn it off to remove.\n" + body
+  assert.strictEqual(P.isPristineUpdateHook(legacy, md5, [legacy]), true)
+  assert.strictEqual(P.isPristineUpdateHook(legacy + "echo mine\n", md5, [legacy]), false)
+  assert.strictEqual(P.isPristineUpdateHook("", md5, [""]), false)
+  assert.strictEqual(P.isPristineUpdateHook("#!/bin/bash\necho custom\n", md5, []), false)
 })
 
 test("resolveSaveTarget prevents silent overwrite on slug collisions and prompts on name clash", () => {

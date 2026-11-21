@@ -5,6 +5,16 @@ All notable changes to Barcraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] - 2026-11-21
+
+### Fixed
+
+- **No lost edits to shared files**: Barcraft rewrites `omarchy-menu.jsonc` and `shell.toml` only while they still match what it read. The check runs right before the atomic rename; if another program saved in between, Barcraft reads the file again and retries (at most three times) instead of overwriting it.
+- **Update hook ownership by content, not header**: the hook Barcraft writes now carries an MD5 digest of its own body. Barcraft replaces or removes it only while that digest still matches and the file is unchanged at that moment, so an edited hook is left alone even if it keeps the header. A hook from 0.5.0 or 0.5.1 counts as Barcraft's only when it is byte-identical to what that version wrote.
+- **No file contents on command lines**: file writes and **Copy TOML** pass the content over stdin. Command lines carry only the path, an MD5 and flags.
+- Rewritten files keep their permissions (0.5.1's temp-file writer left them at 0600).
+- A hook conflict no longer leaves the hook sync stuck.
+
 ## [0.5.1] - 2026-11-21
 
 ### Fixed

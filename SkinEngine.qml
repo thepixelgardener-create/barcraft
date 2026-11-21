@@ -560,9 +560,12 @@ Item {
     return SkinParser.serializeToml(committedSkin)
   }
 
+  // The TOML goes to wl-copy over stdin, never as an argument.
   function copyActiveToml() {
-    runCommand(["wl-copy", "--", exportActiveToml()])
-    notice("status.copied", "", false)
+    runJob(["wl-copy"], exportActiveToml(), function(code) {
+      if (code === 0) engine.notice("status.copied", "", false)
+      else engine.notice("status.copyFailed", "", true)
+    })
   }
 
   function importFromClipboard() {
@@ -690,86 +693,153 @@ Item {
     onTriggered: engine.loadState()
   }
 
-  // Atomic POSIX file write via mktemp + mv in the destination directory,
-  // verified byte-for-byte on disk before reporting success or removing an
-  // old renamed file (never relies on Quickshell FileView's `saved` signal).
+  // One short shell job with its own watchdog. `input`, when set, goes in over
+  // stdin and never onto the command line: other accounts can read command
+  // lines, and Quickshell logs a command that fails to start.
   Component {
-    id: atomicWriteProc
+    id: pipeJob
     Item {
       id: job
       visible: false
       property var command: []
+      property var input: null
       property var callback: null
       property bool finished: false
       function start() {
         proc.running = true
         watchdog.start()
       }
+      function finish(code) {
+        if (finished) return
+        finished = true
+        watchdog.stop()
+        if (callback) callback(code)
+        destroy()
+      }
       Timer {
         id: watchdog
         interval: 8000
         repeat: false
         onTriggered: {
-          if (job.finished) return
-          job.finished = true
           proc.running = false
-          if (job.callback) job.callback(false, -1)
-          job.destroy()
+          job.finish(-1)
         }
       }
       Process {
         id: proc
         command: job.command
-        onExited: function(code, status) {
-          if (job.finished) return
-          job.finished = true
-          watchdog.stop()
-          if (job.callback) job.callback(code === 0, code)
-          job.destroy()
+        stdinEnabled: job.input !== null
+        onStarted: {
+          if (job.input === null) return
+          write(String(job.input))
+          stdinEnabled = false
         }
+        onExited: function(code, status) { job.finish(code) }
       }
     }
   }
 
+  // done(code): the job's exit code, or -1 when it could not run in time.
+  function runJob(argv, input, done) {
+    var job = pipeJob.createObject(engine, {
+      command: argv,
+      input: input === undefined ? null : input,
+      callback: done || null
+    })
+    if (!job) {
+      if (done) done(-1)
+      return
+    }
+    job.start()
+  }
+
+  // Atomic write that never trusts FileView's `saved` signal. The content goes
+  // in over stdin, lands in a temp file beside the target, and must match its
+  // MD5 before it replaces the target: by rename, or by hard link when the
+  // target may not exist yet. The target keeps its permissions. With
+  // `expect`, the target is replaced only while it still has that MD5
+  // ("missing": only while it still doesn't exist), checked right before the
+  // rename, so a save another program made after Barcraft read the file is
+  // never thrown away. Codes for done(ok, code): 0 written, 1 failed,
+  // 2 target exists (noClobber), 3 target changed since it was read (expect).
   function writeFile(filePath, content, done, options) {
     var opts = options || {}
-    var noClobber = opts.noClobber ? "1" : "0"
-    var chmodExec = opts.chmodExec ? "1" : "0"
-    var removeAfter = String(opts.removeAfter || "")
+    var text = String(content === undefined || content === null ? "" : content)
     var script =
-      "dest=$1; content=$2; noclobber=$3; mkexec=$4; old=$5; " +
+      "dest=$1; want=$2; noclobber=$3; mkexec=$4; old=$5; expect=$6; " +
+      "md5() { md5sum | cut -d' ' -f1; }; " +
       "[ -n \"$dest\" ] && [ ! -L \"$dest\" ] || exit 1; " +
       "if [ \"$noclobber\" = 1 ] && [ -e \"$dest\" ]; then exit 2; fi; " +
       "dir=$(dirname -- \"$dest\"); " +
       "mkdir -p -- \"$dir\" || exit 1; " +
       "tmp=$(mktemp \"$dir/.barcraft.XXXXXX\") || exit 1; " +
       "trap 'rm -f -- \"$tmp\"' EXIT; " +
-      "printf '%s' \"$content\" > \"$tmp\" || exit 1; " +
+      "cat > \"$tmp\" || exit 1; " +
+      "[ \"$(md5 < \"$tmp\")\" = \"$want\" ] || exit 1; " +
+      "if [ -f \"$dest\" ]; then chmod --reference=\"$dest\" -- \"$tmp\" || exit 1; " +
+      "else m=$(umask); chmod \"$(printf '%o' $(( 0666 & ~m )))\" -- \"$tmp\" || exit 1; fi; " +
       "if [ \"$mkexec\" = 1 ]; then chmod 0755 -- \"$tmp\" || exit 1; fi; " +
-      "if [ \"$noclobber\" = 1 ]; then " +
-      "  ln -- \"$tmp\" \"$dest\" || exit 2; " +
-      "  rm -f -- \"$tmp\"; " +
+      "if [ \"$expect\" = missing ]; then ln -- \"$tmp\" \"$dest\" 2>/dev/null || exit 3; " +
+      "elif [ \"$noclobber\" = 1 ]; then ln -- \"$tmp\" \"$dest\" 2>/dev/null || exit 2; " +
       "else " +
+      "  if [ -n \"$expect\" ]; then " +
+      "    [ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$expect\" ] || exit 3; " +
+      "  fi; " +
       "  mv -f -- \"$tmp\" \"$dest\" || exit 1; " +
       "fi; " +
-      "trap - EXIT; " +
-      "[ ! -L \"$dest\" ] && [ -f \"$dest\" ] || exit 1; " +
-      "printf '%s' \"$content\" | cmp -s -- - \"$dest\" || exit 1; " +
+      "rm -f -- \"$tmp\"; trap - EXIT; " +
+      "[ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$want\" ] || exit 1; " +
       "if [ -n \"$old\" ] && [ \"$old\" != \"$dest\" ] && [ ! -L \"$old\" ] && [ -f \"$old\" ]; then " +
       "  rm -f -- \"$old\" || true; " +
       "fi"
-    var job = atomicWriteProc.createObject(engine, {
-      command: ["sh", "-c", script, "sh", String(filePath || ""), String(content || ""), noClobber, chmodExec, removeAfter],
-      callback: function(ok, code) {
-        if (!ok) console.warn("Barcraft: could not write " + filePath + " (code " + code + ")")
-        if (done) done(ok, code)
-      }
+    runJob(["sh", "-c", script, "sh", String(filePath || ""), Qt.md5(text),
+            opts.noClobber ? "1" : "0", opts.chmodExec ? "1" : "0",
+            String(opts.removeAfter || ""), String(opts.expect || "")],
+      text,
+      function(code) {
+        if (code !== 0 && code !== 3) console.warn("Barcraft: could not write " + filePath + " (code " + code + ")")
+        if (done) done(code === 0, code)
+      })
+  }
+
+  // Removes a regular file only while it still has the MD5 Barcraft checked.
+  function removeFileIfUnchanged(filePath, expect, done) {
+    var script =
+      "p=$1; h=$2; " +
+      "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ \"$(md5sum < \"$p\" | cut -d' ' -f1)\" = \"$h\" ] || exit 3; " +
+      "rm -f -- \"$p\""
+    runJob(["sh", "-c", script, "sh", String(filePath || ""), String(expect || "")], null, function(code) {
+      if (done) done(code === 0, code)
     })
-    if (!job) {
-      if (done) done(false, -1)
-      return
-    }
-    job.start()
+  }
+
+  // Read-modify-write for a file other programs edit too. Reads it fresh,
+  // lets `change(current, missing)` return the new text (or null to leave it),
+  // and writes only if nobody saved the file in between; otherwise it starts
+  // over, at most three times. done(ok)
+  function editSharedFile(filePath, change, done, attempt) {
+    var tries = attempt || 0
+    readTextFile(filePath, function(status, text) {
+      if (status === "error") {
+        if (done) done(false)
+        return
+      }
+      var missing = status === "missing"
+      var current = missing ? "" : text
+      var next = change(current, missing)
+      if (next === null || next === undefined || next === current) {
+        if (done) done(true)
+        return
+      }
+      engine.writeFile(filePath, next, function(ok, code) {
+        if (code === 3 && tries < 2) {
+          engine.editSharedFile(filePath, change, done, tries + 1)
+          return
+        }
+        if (code === 3) console.warn("Barcraft: " + filePath + " kept changing while Barcraft updated it; left it as it is")
+        if (done) done(ok)
+      }, { expect: missing ? "missing" : Qt.md5(current) })
+    })
   }
 
   // Fresh, uncached read of a regular non-symlink file from disk.
@@ -966,18 +1036,37 @@ Item {
 
   // After an Omarchy update: has Omarchy's bar moved under Barcraft's copy?
   // Notify-only; merging stays a deliberate step (scripts/sync-upstream.sh).
-  function updateHookScript() {
+  function updateHookCommands() {
     return [
-      "#!/bin/bash",
-      SkinParser.HOOK_OWNED_MARKER,
-      "# Turn \"Check after Omarchy updates\" off in Barcraft Studio to remove this file.",
       "plugin=" + shellQuoteSingle(pluginDir),
       "[[ -f $plugin/scripts/sync-upstream.sh ]] || exit 0",
       "if ! bash \"$plugin/scripts/sync-upstream.sh\" --check >/dev/null 2>&1; then",
       "  omarchy-notification-send -g " + shellQuoteSingle("󰍜") + " Barcraft " + shellQuoteSingle(strings.t("hook.changed")),
       "fi",
       ""
-    ].join("\n")
+    ]
+  }
+
+  // Header, then a digest of the rest: Barcraft only ever replaces or removes
+  // a hook whose digest still matches, so an edited copy is left alone.
+  function updateHookScript() {
+    var body = ["# Turn \"Check after Omarchy updates\" off in Barcraft Studio to remove this file."]
+      .concat(updateHookCommands()).join("\n")
+    return SkinParser.stampUpdateHook(body, Qt.md5)
+  }
+
+  // Exactly what 0.5.0 and 0.5.1 wrote here, so an untouched older hook is
+  // still recognised as Barcraft's; anything else in that file is left alone.
+  function legacyUpdateHookScripts() {
+    var commands = updateHookCommands()
+    return [
+      ["#!/bin/bash",
+       "# Added by Barcraft (thepixelgardener.barcraft). Turn \"Check after Omarchy",
+       "# updates\" off in Barcraft Studio to remove this file."].concat(commands).join("\n"),
+      ["#!/bin/bash",
+       SkinParser.HOOK_OWNED_MARKER,
+       "# Turn \"Check after Omarchy updates\" off in Barcraft Studio to remove this file."].concat(commands).join("\n")
+    ]
   }
 
   property bool _menuSyncBusy: false
@@ -993,8 +1082,8 @@ Item {
     syncUpdateHook()
   }
 
-  // Always reads the current on-disk omarchy-menu.jsonc before modifying it,
-  // so edits made to other menu entries after Barcraft loaded are preserved.
+  // The menu file is shared: read it fresh, change only Barcraft's block, and
+  // write it back only if nobody else saved it in between (editSharedFile).
   function syncMenu() {
     if (!isPrimary || !settled) return
     if (_menuSyncBusy) {
@@ -1005,32 +1094,18 @@ Item {
     _menuSyncAgain = false
     var want = !!prefs.omarchyMenu
 
-    function finish() {
+    editSharedFile(menuExtensionPath, function(current) {
+      if (!want && current.indexOf("barcraft:begin") < 0) return null
+      return SkinParser.applyMenuBlock(current, want ? engine.menuEntries() : null)
+    }, function() {
       engine._menuSyncBusy = false
       if (engine._menuSyncAgain) Qt.callLater(engine.syncMenu)
-    }
-
-    readTextFile(menuExtensionPath, function(status, text) {
-      if (status === "error") {
-        finish()
-        return
-      }
-      var current = status === "missing" ? "" : text
-      if (!want && current.indexOf("barcraft:begin") < 0) {
-        finish()
-        return
-      }
-      var next = SkinParser.applyMenuBlock(current, want ? engine.menuEntries() : null)
-      if (next === current) {
-        finish()
-        return
-      }
-      writeFile(menuExtensionPath, next, function() { finish() })
     })
   }
 
-  // Verifies Barcraft's ownership marker before overwriting or removing
-  // post-update.d/barcraft-sync so a user-maintained hook is never touched.
+  // post-update.d/barcraft-sync is replaced or removed only while it is
+  // exactly what Barcraft wrote (isPristineUpdateHook), and only if it is
+  // still unchanged at that moment. Anything else in its place is left alone.
   function syncUpdateHook() {
     if (!isPrimary || !settled) return
     if (_hookSyncBusy) {
@@ -1047,40 +1122,46 @@ Item {
     }
 
     readTextFile(updateHookPath, function(status, text) {
-      if (!want) {
-        if (status === "ok" && SkinParser.isOwnedUpdateHook(text)) {
-          var rmScript =
-            "p=$1; m=$2; " +
-            "[ ! -L \"$p\" ] && [ -f \"$p\" ] && head -n 6 -- \"$p\" | grep -qF -- \"$m\" && rm -f -- \"$p\""
-          runCommand(["sh", "-c", rmScript, "sh", updateHookPath, SkinParser.HOOK_OWNED_MARKER])
+      if (status === "missing") {
+        if (!want) {
+          finish()
+          return
         }
-        finish()
+        engine.writeFile(engine.updateHookPath, engine.updateHookScript(), function() { finish() },
+          { expect: "missing", chmodExec: true })
         return
       }
 
-      if (status === "missing") {
-        writeFile(updateHookPath, engine.updateHookScript(), function() { finish() }, { noClobber: true, chmodExec: true })
+      var pristine = status === "ok"
+        && SkinParser.isPristineUpdateHook(text, Qt.md5, engine.legacyUpdateHookScripts())
+      if (pristine && !want) {
+        engine.removeFileIfUnchanged(engine.updateHookPath, Qt.md5(text), function() { finish() })
         return
       }
-      if (status === "ok" && SkinParser.isOwnedUpdateHook(text)) {
+      if (pristine) {
         var desired = engine.updateHookScript()
         if (text === desired) {
           finish()
           return
         }
-        writeFile(updateHookPath, desired, function() { finish() }, { chmodExec: true })
+        engine.writeFile(engine.updateHookPath, desired, function() { finish() },
+          { expect: Qt.md5(text), chmodExec: true })
+        return
+      }
+      if (!want) {
+        finish()
         return
       }
 
-      // Existing file is unreadable, a symlink, or user-maintained: leave it
-      // untouched and revert the toggle so the UI reflects reality.
-      console.warn("Barcraft: keeping existing " + updateHookPath + " (not created by Barcraft)")
+      // Unreadable, a symlink, somebody else's, or edited since Barcraft wrote
+      // it: leave it untouched and turn the toggle back off to match.
+      console.warn("Barcraft: keeping existing " + updateHookPath + " (not Barcraft's, or edited since)")
       if (engine.prefs.updateCheck) {
         var nextPrefs = {}
         for (var k in engine.prefs) nextPrefs[k] = engine.prefs[k]
         nextPrefs.updateCheck = false
         engine.prefs = SkinParser.normalizePrefs(nextPrefs)
-        engine.persistDebounce.restart()
+        persistDebounce.restart()
       }
       engine.notice("status.hookConflict", "post-update.d/barcraft-sync", true)
       finish()
@@ -1139,27 +1220,12 @@ Item {
     var targetScale = committedIconScale
     var reset = Math.abs(targetScale - 1) < 0.001
 
-    function finish() {
+    editSharedFile(userShellTomlPath, function(current) {
+      if (reset && current.indexOf("# barcraft") < 0) return null
+      return SkinParser.applyBarIconOverrides(current, targetScale)
+    }, function() {
       engine._iconSyncBusy = false
       if (engine._iconSyncAgain) Qt.callLater(engine.applyIconScale)
-    }
-
-    readTextFile(userShellTomlPath, function(status, text) {
-      if (status === "error") {
-        finish()
-        return
-      }
-      var current = status === "missing" ? "" : text
-      if (reset && current.indexOf("# barcraft") < 0) {
-        finish()
-        return
-      }
-      var next = SkinParser.applyBarIconOverrides(current, targetScale)
-      if (next === current) {
-        finish()
-        return
-      }
-      writeFile(userShellTomlPath, next, function() { finish() })
     })
   }
 
