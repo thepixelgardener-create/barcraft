@@ -54,6 +54,9 @@ Item {
   property var userSkins: []
   property var customSkin: SkinParser.defaultSkin()
   property bool hasCustomDraft: false
+  // One-step undo checkpoint saved before a successful clipboard paste.
+  property var pasteUndoSnapshot: null
+  readonly property bool canUndoPaste: pasteUndoSnapshot !== null
   property var prefs: SkinParser.defaultPrefs()
   // screen name -> skin id ("theme" for the theme's skin).
   property var monitorSkins: ({})
@@ -77,7 +80,10 @@ Item {
   // Studio messages: a translation key, its %1, and whether it's an error.
   signal notice(string key, string arg, bool isError)
 
-  readonly property var themeSkin: SkinParser.parseFromShellValues(Commons.Color.shellValues, function(id) { return engine.findSkinById(id) })
+  readonly property var themeSkin: {
+    var _deps = engine.userSkins
+    return SkinParser.parseFromShellValues(Commons.Color.shellValues, function(id) { return engine.findSkinById(id) })
+  }
   readonly property bool usingThemeSkin: followTheme && themeSkin !== null && !hasCustomDraft
 
   readonly property var committedSkin: {
@@ -216,7 +222,7 @@ Item {
     var own = monitorSkinFor(screenName) || committedSkin
     return {
       standard: false,
-      sizePx: barSizePxOf(committedSkin),
+      sizePx: barSizePxOf(own),
       edgePx: edgePxOf(own),
       autoHide: own.visibility === "autohide"
     }
@@ -247,8 +253,13 @@ Item {
     previewScreen = ""
   }
 
+  function clearPasteUndo() {
+    if (pasteUndoSnapshot !== null) pasteUndoSnapshot = null
+  }
+
   function setStandard(enabled) {
     clearPreview()
+    clearPasteUndo()
     standard = !!enabled
     revision++
     persistState()
@@ -266,6 +277,7 @@ Item {
     var found = findSkinById(id)
     if (!found) return false
     clearPreview()
+    clearPasteUndo()
     standard = false
     activeSkinId = found.id
     hasCustomDraft = false
@@ -296,6 +308,7 @@ Item {
 
   function setFollowTheme(enabled) {
     clearPreview()
+    clearPasteUndo()
     followTheme = !!enabled
     if (followTheme && themeSkin) standard = false
     if (followTheme && themeSkin) hasCustomDraft = false
@@ -402,6 +415,7 @@ Item {
 
   function resetToPreset() {
     clearPreview()
+    clearPasteUndo()
     standard = false
     hasCustomDraft = false
     var found = findSkinById(activeSkinId)
@@ -474,6 +488,7 @@ Item {
       }
       engine.replaceUserSkin(slug, toSave)
       engine.clearPreview()
+      engine.clearPasteUndo()
       engine.standard = false
       engine.activeSkinId = slug
       engine.hasCustomDraft = false
@@ -584,6 +599,14 @@ Item {
       notice("status.importFailed", "", true)
       return
     }
+    var prevSkin = committedSkin
+    pasteUndoSnapshot = {
+      activeSkinId: activeSkinId,
+      followTheme: followTheme,
+      standard: standard,
+      hasCustomDraft: hasCustomDraft,
+      customSkin: prevSkin ? SkinParser.normalizeSkin(prevSkin, prevSkin.id, prevSkin.source) : null
+    }
     clearPreview()
     standard = false
     customSkin = skin
@@ -591,6 +614,25 @@ Item {
     revision++
     persistState()
     notice("status.imported", skin.name, false)
+  }
+
+  function undoPaste() {
+    var snap = pasteUndoSnapshot
+    if (!snap) return false
+    pasteUndoSnapshot = null
+    clearPreview()
+    activeSkinId = snap.activeSkinId
+    followTheme = snap.followTheme
+    standard = snap.standard
+    var missingSaved = !snap.hasCustomDraft && !snap.standard && !(snap.followTheme && themeSkin) && !findSkinById(snap.activeSkinId)
+    hasCustomDraft = snap.hasCustomDraft || (missingSaved && !!snap.customSkin)
+    if (snap.customSkin) {
+      customSkin = SkinParser.normalizeSkin(snap.customSkin, snap.customSkin.id, hasCustomDraft ? "custom" : snap.customSkin.source)
+    }
+    revision++
+    persistState()
+    notice("status.pasteUndone", currentName(), false)
+    return true
   }
 
   // ---- Settings: shell.json `bar.barcraft` ---------------------------------
@@ -625,6 +667,7 @@ Item {
   }
 
   function applyState(st) {
+    clearPasteUndo()
     activeSkinId = st.activeSkinId
     followTheme = st.followTheme
     standard = !!st.standard
@@ -962,8 +1005,103 @@ Item {
     }
   }
 
+  property bool _scanAgain: false
+
   function rescanUserSkins() {
+    if (scanProc.running) {
+      _scanAgain = true
+      return
+    }
+    _scanAgain = false
     scanProc.running = true
+  }
+
+  // Live watch on the user and legacy skin directories (plus their parents so
+  // creating ~/.config/omarchy/bar/skins for the first time starts watching it).
+  property real _skinWatchStartedAt: 0
+  property int _skinWatchQuickExits: 0
+  property bool _skinWatchRewatch: false
+  property bool _skinWatchDisabled: false
+
+  function startSkinWatcher() {
+    if (!isPrimary || _skinWatchDisabled || skinWatcher.running) return
+    _skinWatchRewatch = false
+    skinWatcher.running = true
+  }
+
+  function requestSkinRewatch() {
+    if (!isPrimary || _skinWatchDisabled) return
+    skinRescanDebounce.restart()
+    _skinWatchRewatch = true
+    if (skinWatcher.running) {
+      skinWatcher.running = false
+    } else {
+      skinWatchRestart.interval = 100
+      skinWatchRestart.restart()
+    }
+  }
+
+  Timer {
+    id: skinRescanDebounce
+    interval: 150
+    repeat: false
+    onTriggered: engine.rescanUserSkins()
+  }
+
+  Timer {
+    id: skinWatchRestart
+    interval: 1000
+    repeat: false
+    onTriggered: engine.startSkinWatcher()
+  }
+
+  Timer {
+    id: skinWatchRecovered
+    interval: 1000
+    repeat: false
+    onTriggered: {
+      engine._skinWatchQuickExits = 0
+      engine.rescanUserSkins()
+    }
+  }
+
+  Process {
+    id: skinWatcher
+    command: ["bash", "-c",
+      "command -v inotifywait >/dev/null 2>&1 || exit 127; " +
+      "dirs=(); for d in \"$1\" \"$2\" \"$3\" \"$4\"; do [ -n \"$d\" ] && [ -d \"$d\" ] && dirs+=(\"$d\"); done; " +
+      "[ \"${#dirs[@]}\" -gt 0 ] || exit 1; " +
+      "exec inotifywait -m -q -e close_write,create,delete,delete_self,move,move_self --format '%w|%e|%f' \"${dirs[@]}\"",
+      "barcraft-skins-watch", engine.userSkinsDir, engine.legacySkinsDir, engine.configDir + "/bar", engine.configDir]
+    onRunningChanged: {
+      if (!running) return
+      engine._skinWatchStartedAt = Date.now()
+      if (engine._skinWatchQuickExits > 0) skinWatchRecovered.restart()
+    }
+    stdout: SplitParser {
+      onRead: function(line) {
+        var action = SkinParser.classifySkinWatchEvent(line, engine.userSkinsDir, engine.legacySkinsDir, engine.configDir)
+        if (action === "rewatch") engine.requestSkinRewatch()
+        else if (action === "rescan") skinRescanDebounce.restart()
+      }
+    }
+    onExited: function(code, status) {
+      skinWatchRecovered.stop()
+      if (!engine.isPrimary) return
+      if (code === 127) {
+        engine._skinWatchDisabled = true
+        return
+      }
+      if (engine._skinWatchRewatch) {
+        engine._skinWatchRewatch = false
+        skinWatchRestart.interval = 100
+        skinWatchRestart.restart()
+        return
+      }
+      engine._skinWatchQuickExits = Date.now() - engine._skinWatchStartedAt < 1000 ? engine._skinWatchQuickExits + 1 : 0
+      skinWatchRestart.interval = Math.min(60000, 1000 * Math.pow(2, Math.max(0, engine._skinWatchQuickExits - 4)))
+      skinWatchRestart.restart()
+    }
   }
 
   Timer {
@@ -1036,37 +1174,16 @@ Item {
 
   // After an Omarchy update: has Omarchy's bar moved under Barcraft's copy?
   // Notify-only; merging stays a deliberate step (scripts/sync-upstream.sh).
-  function updateHookCommands() {
-    return [
-      "plugin=" + shellQuoteSingle(pluginDir),
-      "[[ -f $plugin/scripts/sync-upstream.sh ]] || exit 0",
-      "if ! bash \"$plugin/scripts/sync-upstream.sh\" --check >/dev/null 2>&1; then",
-      "  omarchy-notification-send -g " + shellQuoteSingle("󰍜") + " Barcraft " + shellQuoteSingle(strings.t("hook.changed")),
-      "fi",
-      ""
-    ]
-  }
-
   // Header, then a digest of the rest: Barcraft only ever replaces or removes
   // a hook whose digest still matches, so an edited copy is left alone.
   function updateHookScript() {
-    var body = ["# Turn \"Check after Omarchy updates\" off in Barcraft Studio to remove this file."]
-      .concat(updateHookCommands()).join("\n")
-    return SkinParser.stampUpdateHook(body, Qt.md5)
+    return SkinParser.updateHookScript(pluginDir, strings.t("hook.changed"), Qt.md5)
   }
 
-  // Exactly what 0.5.0 and 0.5.1 wrote here, so an untouched older hook is
-  // still recognised as Barcraft's; anything else in that file is left alone.
+  // Everything 0.5.0 and 0.5.1 could have written here, in any language they
+  // shipped, so an untouched older hook is still recognised as Barcraft's.
   function legacyUpdateHookScripts() {
-    var commands = updateHookCommands()
-    return [
-      ["#!/bin/bash",
-       "# Added by Barcraft (thepixelgardener.barcraft). Turn \"Check after Omarchy",
-       "# updates\" off in Barcraft Studio to remove this file."].concat(commands).join("\n"),
-      ["#!/bin/bash",
-       SkinParser.HOOK_OWNED_MARKER,
-       "# Turn \"Check after Omarchy updates\" off in Barcraft Studio to remove this file."].concat(commands).join("\n")
-    ]
+    return SkinParser.legacyUpdateHookScripts(pluginDir)
   }
 
   property bool _menuSyncBusy: false
@@ -1192,6 +1309,7 @@ Item {
       "Icon size: " + Math.round(committedIconScale * 100) + "%" + (Math.abs(committedIconScale - 1) > 0.001 ? " via [bar] tokens in ~/.config/omarchy/shell.toml" : ""),
       "Saved skins: " + userSkins.length + " in " + userSkinsDir,
       "Omarchy menu entries: " + (prefs.omarchyMenu ? "on" : "off") + ", update check hook: " + (prefs.updateCheck ? "on" : "off"),
+      "Plugin folder: " + pluginDir,
       "Omarchy bar base: scripts/sync-upstream.sh --check tells whether Omarchy's bar moved"
     ]
     return lines.join("\n")
@@ -1249,28 +1367,20 @@ Item {
       onStreamFinished: {
         try {
           var rows = JSON.parse(text || "[]")
-          var parsed = []
-          var seen = Object.create(null)
-          var allowed = [engine.userSkinsDir, engine.legacySkinsDir]
-          for (var i = 0; i < rows.length; i++) {
-            var file = String(rows[i].path || "")
-            if (!SkinParser.isSafeSkinPath(file, allowed)) continue
-            var slug = SkinParser.slugify(file.replace(/^.*\//, "").replace(/\.toml$/, ""))
-            if (seen[slug]) continue
-            var skin = SkinParser.parseToml(rows[i].text, slug, "user", function(id) { return engine.findSkinById(id) })
-            if (!skin) continue
-            seen[slug] = true
-            skin.id = slug
-            skin.source = "user"
-            skin.path = file
-            skin.category = skin.art !== "none" ? "wild" : "classic"
-            parsed.push(skin)
+          var parsed = SkinParser.parseSkinLibrary(rows, [engine.userSkinsDir, engine.legacySkinsDir], engine.builtinSkins)
+          if (JSON.stringify(parsed) !== JSON.stringify(engine.userSkins)) {
+            engine.userSkins = parsed
+            engine.revision++
           }
-          engine.userSkins = parsed
-          engine.revision++
         } catch (e) {
           console.warn("Barcraft: could not read saved skins: " + e)
         }
+      }
+    }
+    onExited: {
+      if (engine._scanAgain) {
+        engine._scanAgain = false
+        Qt.callLater(engine.rescanUserSkins)
       }
     }
   }
@@ -1313,6 +1423,14 @@ Item {
 
   Component.onCompleted: {
     rescanUserSkins()
+    startSkinWatcher()
     loadTimer.restart()
+  }
+
+  Component.onDestruction: {
+    skinWatchRestart.stop()
+    skinWatchRecovered.stop()
+    skinRescanDebounce.stop()
+    skinWatcher.running = false
   }
 }

@@ -5,6 +5,19 @@ All notable changes to Barcraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-11-21
+
+### Added
+
+- **Live skin reload**: Barcraft watches `~/.config/omarchy/bar/skins` (and the legacy `bar-skins` folder) with `inotifywait`, so a skin saved, renamed or deleted from an editor or a theme install shows up in Studio without a restart. It also notices when those folders are created or removed later. Without `inotifywait`, skins still load at startup as before.
+- **Undo paste**: **Paste skin** saves a one-step checkpoint. **Undo paste** (Skins tab and Craft footer) restores the previous skin, draft and theme-follow state. Choosing, saving or resetting a skin clears it.
+
+### Changed
+
+- **Per-screen skins are fully per-screen**: a screen with its own skin now uses its own bar height, icon color and reserved space, for first-party widgets, custom commands and plugin widgets alike. Icon size and glass blur stay shared.
+- Saved skins that inherit from each other (`preset = "<id>"`) resolve in one pass regardless of file order, including chains, cycles and user skins named after a built-in.
+- Hook ownership checks recognise a 0.5.0/0.5.1 hook written in any shipped language, not only the current one.
+
 ## [0.5.2] - 2026-11-21
 
 ### Fixed

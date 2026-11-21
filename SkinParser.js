@@ -48,6 +48,56 @@ var HOOK_OWNED_MARKER = "# Added by Barcraft (thepixelgardener.barcraft)."
 var HOOK_DIGEST_PREFIX = "# barcraft-digest: "
 var HOOK_HEAD = "#!/bin/bash\n" + HOOK_OWNED_MARKER + "\n" + HOOK_DIGEST_PREFIX
 
+// The notification text 0.5.0 and 0.5.1 put in the hook, in every language
+// they shipped. Frozen on purpose: an untouched old hook holds one of these,
+// whatever the language is today.
+var LEGACY_HOOK_MESSAGES = [
+  "Omarchy updated its bar. Run scripts/sync-upstream.sh in the Barcraft folder to carry the update over.",
+  "Omarchy hat seine Leiste aktualisiert. Führe scripts/sync-upstream.sh im Barcraft-Ordner aus, um das Update zu übernehmen."
+]
+var LEGACY_HOOK_HEADERS = [
+  // 0.5.0
+  ["#!/bin/bash",
+   "# Added by Barcraft (thepixelgardener.barcraft). Turn \"Check after Omarchy",
+   "# updates\" off in Barcraft Studio to remove this file."],
+  // 0.5.1
+  ["#!/bin/bash",
+   HOOK_OWNED_MARKER,
+   "# Turn \"Check after Omarchy updates\" off in Barcraft Studio to remove this file."]
+]
+
+function shellQuoteSingle(text) {
+  return "'" + String(text).replace(/\0/g, "").replace(/'/g, "'\\''") + "'"
+}
+
+// The hook's commands: notify when Omarchy's bar moved under Barcraft's copy.
+function updateHookCommands(pluginDir, message) {
+  return [
+    "plugin=" + shellQuoteSingle(pluginDir),
+    "[[ -f $plugin/scripts/sync-upstream.sh ]] || exit 0",
+    "if ! bash \"$plugin/scripts/sync-upstream.sh\" --check >/dev/null 2>&1; then",
+    "  omarchy-notification-send -g " + shellQuoteSingle("󰍜") + " Barcraft " + shellQuoteSingle(message),
+    "fi",
+    ""
+  ]
+}
+
+function updateHookScript(pluginDir, message, md5) {
+  var body = ["# Turn \"Check after Omarchy updates\" off in Barcraft Studio to remove this file."]
+    .concat(updateHookCommands(pluginDir, message)).join("\n")
+  return stampUpdateHook(body, md5)
+}
+
+// Every hook 0.5.0 or 0.5.1 could have written for this plugin folder.
+function legacyUpdateHookScripts(pluginDir) {
+  var out = []
+  for (var m = 0; m < LEGACY_HOOK_MESSAGES.length; m++) {
+    var commands = updateHookCommands(pluginDir, LEGACY_HOOK_MESSAGES[m])
+    for (var h = 0; h < LEGACY_HOOK_HEADERS.length; h++) out.push(LEGACY_HOOK_HEADERS[h].concat(commands).join("\n"))
+  }
+  return out
+}
+
 // The post-update hook Barcraft writes: a fixed header, then a digest line
 // holding the MD5 of everything after it. `md5` is Qt.md5 in the shell (a
 // stand-in in the tests): the hex MD5 of the text's UTF-8 bytes.
@@ -569,7 +619,7 @@ function skinFromKvMap(map, fallbackId, source, lookup) {
   return normalizeSkin(merged, fallbackId, source)
 }
 
-function parseToml(text, fallbackId, source, lookup) {
+function extractSkinKvMap(text) {
   var raw = String(text || "")
   if (!raw.trim()) return null
   var sections = parseTomlSections(raw)
@@ -580,8 +630,124 @@ function parseToml(text, fallbackId, source, lookup) {
   var k
   for (k in top) { if (hasOwn(KEY_MAP, k) || k === "preset") { map[k] = top[k]; found = true } }
   for (k in skinSec) { if (!isUnsafeKey(k)) { map[k] = skinSec[k]; found = true } }
-  if (!found) return null
+  return found ? map : null
+}
+
+function parseToml(text, fallbackId, source, lookup) {
+  var map = extractSkinKvMap(text)
+  if (!map) return null
   return skinFromKvMap(map, fallbackId, source, lookup)
+}
+
+// Indexes all skin files first, then resolves `preset = "<id>"` inheritance
+// across the whole library in one pass (handling arbitrary file order,
+// multi-level chains, and cycles cleanly). Earlier rows win a slug clash.
+function parseSkinLibrary(rows, allowedDirs, builtinList) {
+  var list = Array.isArray(rows) ? rows : []
+  var builtins = Array.isArray(builtinList) ? builtinList : builtinSkins()
+  var builtinById = Object.create(null)
+  for (var b = 0; b < builtins.length; b++) {
+    if (builtins[b] && builtins[b].id) builtinById[builtins[b].id] = builtins[b]
+  }
+  function lookupBuiltin(id) {
+    var target = String(id || "").trim()
+    if (!target) return null
+    if (hasOwn(builtinById, target)) return builtinById[target]
+    var alias = canonicalSkinId(target)
+    if (hasOwn(builtinById, alias)) return builtinById[alias]
+    return null
+  }
+
+  var order = []
+  var rawBySlug = Object.create(null)
+  for (var i = 0; i < list.length; i++) {
+    var row = list[i]
+    if (!row || typeof row !== "object") continue
+    var file = String(row.path || "")
+    if (!isSafeSkinPath(file, allowedDirs)) continue
+    var slug = slugify(file.replace(/^.*\//, "").replace(/\.toml$/, ""))
+    if (hasOwn(rawBySlug, slug)) continue
+    var map = extractSkinKvMap(row.text)
+    if (!map) continue
+    rawBySlug[slug] = { slug: slug, path: file, map: map }
+    order.push(slug)
+  }
+
+  var resolved = Object.create(null)
+  var visiting = Object.create(null)
+
+  function resolveSlug(slug) {
+    if (hasOwn(resolved, slug)) return resolved[slug]
+    if (hasOwn(visiting, slug) || !hasOwn(rawBySlug, slug)) return null
+    visiting[slug] = true
+    var entry = rawBySlug[slug]
+    var skin = skinFromKvMap(entry.map, slug, "user", function(parentId) {
+      var target = String(parentId || "").trim()
+      if (!target) return null
+      var parentKey = hasOwn(rawBySlug, target) ? target
+        : (hasOwn(rawBySlug, slugify(target)) ? slugify(target) : "")
+      if (parentKey && !hasOwn(visiting, parentKey)) {
+        var fromUser = resolveSlug(parentKey)
+        if (fromUser) return fromUser
+      }
+      return lookupBuiltin(target)
+    })
+    delete visiting[slug]
+    if (!skin) return null
+    skin.id = slug
+    skin.source = "user"
+    skin.path = entry.path
+    skin.category = skin.art !== "none" ? "wild" : "classic"
+    resolved[slug] = skin
+    return skin
+  }
+
+  var parsed = []
+  for (var j = 0; j < order.length; j++) {
+    var s = resolveSlug(order[j])
+    if (s) parsed.push(s)
+  }
+  return parsed
+}
+
+// Classifies one `inotifywait --format '%w|%e|%f'` line against the skin
+// directories and their parents: "rescan", "rewatch", or "ignore".
+function classifySkinWatchEvent(line, userSkinsDir, legacySkinsDir, configDir) {
+  var raw = String(line || "")
+  var first = raw.indexOf("|")
+  if (first < 0) return "ignore"
+  var second = raw.indexOf("|", first + 1)
+  if (second < 0) return "ignore"
+  var dir = raw.slice(0, first).replace(/\/+$/, "")
+  var events = raw.slice(first + 1, second).split(",")
+  var name = raw.slice(second + 1).replace(/[\r\n]+$/, "")
+
+  function hasEvent(ev) { return events.indexOf(ev) !== -1 }
+
+  var userDir = String(userSkinsDir || "").replace(/\/+$/, "")
+  var legacyDir = String(legacySkinsDir || "").replace(/\/+$/, "")
+  var cfgDir = String(configDir || "").replace(/\/+$/, "")
+  var barDir = cfgDir ? (cfgDir + "/bar") : ""
+
+  if (dir === userDir || dir === legacyDir) {
+    if (hasEvent("DELETE_SELF") || hasEvent("MOVE_SELF")) return "rewatch"
+    if (/^[a-z0-9][a-z0-9_-]{0,63}\.toml$/i.test(name)) return "rescan"
+    return "ignore"
+  }
+  if (barDir && dir === barDir) {
+    if (hasEvent("DELETE_SELF") || hasEvent("MOVE_SELF")) return "rewatch"
+    if (name === "skins" && (hasEvent("CREATE") || hasEvent("MOVED_TO") || hasEvent("DELETE") || hasEvent("MOVED_FROM"))) {
+      return "rewatch"
+    }
+    return "ignore"
+  }
+  if (cfgDir && dir === cfgDir) {
+    if ((name === "bar" || name === "bar-skins") && (hasEvent("CREATE") || hasEvent("MOVED_TO") || hasEvent("DELETE") || hasEvent("MOVED_FROM"))) {
+      return "rewatch"
+    }
+    return "ignore"
+  }
+  return "ignore"
 }
 
 function parseFromShellValues(shellValues, lookup) {
@@ -1080,6 +1246,9 @@ if (typeof module !== "undefined") {
     standardSkin: standardSkin,
     parseToml: parseToml,
     parseTomlSections: parseTomlSections,
+    parseSkinLibrary: parseSkinLibrary,
+    classifySkinWatchEvent: classifySkinWatchEvent,
+    copySkin: copySkin,
     serializeToml: serializeToml,
     parseFromShellValues: parseFromShellValues,
     parseStateToml: parseStateToml,
@@ -1099,6 +1268,8 @@ if (typeof module !== "undefined") {
     isSafeSkinPath: isSafeSkinPath,
     stampUpdateHook: stampUpdateHook,
     isPristineUpdateHook: isPristineUpdateHook,
+    updateHookScript: updateHookScript,
+    legacyUpdateHookScripts: legacyUpdateHookScripts,
     resolveSaveTarget: resolveSaveTarget,
     HOOK_OWNED_MARKER: HOOK_OWNED_MARKER
   }
