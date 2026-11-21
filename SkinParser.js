@@ -44,6 +44,55 @@ var ICON_TOKENS = [
   { key: "icon-size", base: 12 }
 ]
 var OWNED_MARKER = "# barcraft"
+var HOOK_OWNED_MARKER = "# Added by Barcraft (thepixelgardener.barcraft)."
+
+function isOwnedUpdateHook(text) {
+  var lines = String(text || "").split("\n")
+  var limit = Math.min(lines.length, 6)
+  for (var i = 0; i < limit; i++) {
+    var trimmed = lines[i].trim()
+    if (trimmed === HOOK_OWNED_MARKER || trimmed.indexOf(HOOK_OWNED_MARKER + " ") === 0) return true
+  }
+  return false
+}
+
+// Picks a target filename slug when saving a user skin:
+// - If an existing user skin has the exact same displayed name:
+//   * updating the currently active skin (or an explicit confirmed overwrite)
+//     keeps that skin's slug in place;
+//   * otherwise returns needsConfirm: true so the UI prompts before overwriting.
+// - If no user skin has the same displayed name, never silently collides with
+//   another skin whose name happens to slugify to the same filename: allocates
+//   a unique slug instead.
+function resolveSaveTarget(cleanName, userSkins, activeSkinId, builtinTakenFn, forceOverwrite) {
+  var list = Array.isArray(userSkins) ? userSkins : []
+  var byId = Object.create(null)
+  var exactMatch = null
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i]
+    if (!s || !s.id) continue
+    byId[s.id] = s
+    if (!exactMatch && s.name === cleanName) exactMatch = s
+  }
+
+  if (exactMatch) {
+    if (exactMatch.id === activeSkinId || forceOverwrite) {
+      return { slug: exactMatch.id, overwrite: true, needsConfirm: false, conflictName: "" }
+    }
+    return { slug: exactMatch.id, overwrite: false, needsConfirm: true, conflictName: exactMatch.name }
+  }
+
+  var base = slugify(cleanName)
+  if (typeof builtinTakenFn === "function" && builtinTakenFn(base)) base = (base + "-custom").slice(0, 40)
+  var candidate = base
+  var n = 2
+  while (hasOwn(byId, candidate) || (typeof builtinTakenFn === "function" && builtinTakenFn(candidate))) {
+    var suffix = "-" + n
+    candidate = base.slice(0, Math.max(1, 40 - suffix.length)) + suffix
+    n++
+  }
+  return { slug: candidate, overwrite: false, needsConfirm: false, conflictName: "" }
+}
 
 function normalizeHex(raw) {
   var s = String(raw || "").trim()
@@ -759,23 +808,48 @@ function applyBarIconOverrides(text, scale) {
   var want = scale !== null && scale !== undefined && Math.abs(Number(scale) - 1) > 0.001
   var values = want ? iconTokenValues(Number(scale)) : {}
 
+  function ownedBarSectionHasUserLines(startIdx) {
+    for (var j = startIdx + 1; j < lines.length; j++) {
+      var t = lines[j].trim()
+      if (!t) continue
+      if (/^\[([A-Za-z0-9_.-]+)\]\s*(#.*)?$/.test(t)) break
+      var m = t.match(/^([A-Za-z0-9_-]+)\s*=/)
+      if (m && tokenKeys.indexOf(m[1]) !== -1 && t.indexOf(OWNED_MARKER) !== -1) continue
+      return true
+    }
+    return false
+  }
+
   var out = []
   var section = ""
   var barHeaderIndex = -1
   var userKeys = {}
+  var droppedOwnedBar = false
   for (var i = 0; i < lines.length; i++) {
     var line = lines[i]
     var trimmed = line.trim()
     var sec = trimmed.match(/^\[([A-Za-z0-9_.-]+)\]\s*(#.*)?$/)
     if (sec) {
       section = sec[1]
-      // A [bar] header Barcraft added goes and comes back below if needed.
-      if (section === "bar" && trimmed.indexOf(OWNED_MARKER) !== -1) continue
+      droppedOwnedBar = false
+      if (section === "bar" && trimmed.indexOf(OWNED_MARKER) !== -1) {
+        // Keep a plain [bar] header if the user added their own keys under
+        // Barcraft's section, so resetting icon-scale never orphans those keys
+        // into whatever section appeared above it.
+        if (ownedBarSectionHasUserLines(i)) {
+          out.push("[bar]")
+          if (barHeaderIndex < 0) barHeaderIndex = out.length - 1
+        } else {
+          droppedOwnedBar = true
+        }
+        continue
+      }
       out.push(line)
       if (section === "bar" && barHeaderIndex < 0) barHeaderIndex = out.length - 1
       continue
     }
     if (section === "bar") {
+      if (droppedOwnedBar && trimmed === "") continue
       var kv = trimmed.match(/^([A-Za-z0-9_-]+)\s*=/)
       if (kv && tokenKeys.indexOf(kv[1]) !== -1) {
         if (trimmed.indexOf(OWNED_MARKER) !== -1) continue
@@ -1007,6 +1081,9 @@ if (typeof module !== "undefined") {
     slugify: slugify,
     sanitizeLabel: sanitizeLabel,
     neutralizeMarkup: neutralizeMarkup,
-    isSafeSkinPath: isSafeSkinPath
+    isSafeSkinPath: isSafeSkinPath,
+    isOwnedUpdateHook: isOwnedUpdateHook,
+    resolveSaveTarget: resolveSaveTarget,
+    HOOK_OWNED_MARKER: HOOK_OWNED_MARKER
   }
 }

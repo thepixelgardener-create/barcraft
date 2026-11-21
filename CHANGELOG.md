@@ -5,6 +5,16 @@ All notable changes to Barcraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-11-21
+
+### Fixed
+
+- **Fresh `omarchy-menu.jsonc` reads**: `syncMenu()` now always reads the current on-disk `omarchy-menu.jsonc` before applying or removing Barcraft's fenced block, preventing stale startup snapshots from clobbering later user edits.
+- **Ownership check on `post-update.d/barcraft-sync`**: Barcraft now inspects the existing hook for its ownership header (`# Added by Barcraft (thepixelgardener.barcraft).`) before overwriting or removing it, leaving user-maintained scripts untouched.
+- **Verified atomic skin writes & renames**: `writeFile()` now writes via `mktemp` + `mv` in the target directory and byte-verifies the committed file (`cmp -s`) before reporting success or unlinking an old renamed skin, avoiding Quickshell `FileView` false-`saved` data loss.
+- **Collision-safe skin saving**: distinct skin names that slugify to the same filename now allocate a unique slug (`-2`, `-3`, …) instead of silently overwriting, saving over a different skin with the same display name requires a second Save confirmation, and newly created skin files refuse to clobber existing unindexed files on disk.
+- **Preserve user keys in `[bar]` on icon-scale reset**: `applyBarIconOverrides()` keeps a plain `[bar]` header in `~/.config/omarchy/shell.toml` whenever user-added keys exist under Barcraft's `[bar] # barcraft` section, and `applyIconScale()` now uses fresh on-disk read-modify-write.
+
 ## [0.5.0] - 2026-11-21
 
 ### Added

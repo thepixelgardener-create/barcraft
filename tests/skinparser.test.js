@@ -138,6 +138,74 @@ test("icon overrides on a missing file", () => {
   assert.strictEqual(P.applyBarIconOverrides(created, 1.0), "")
 })
 
+test("icon overrides keep [bar] header when user added keys under Barcraft's [bar] section", () => {
+  const withUserKey =
+    "[font]\nbase-size = 12\n\n" +
+    "[bar] # barcraft\n" +
+    "icon-slot = 34 # barcraft\n" +
+    "icon-canvas = 20 # barcraft\n" +
+    "icon-font = 16 # barcraft\n" +
+    "icon-size = 15 # barcraft\n" +
+    "size-horizontal = 36\n"
+  const reset = P.applyBarIconOverrides(withUserKey, 1.0)
+  assert.strictEqual(reset, "[font]\nbase-size = 12\n\n[bar]\nsize-horizontal = 36\n")
+
+  const rescaled = P.applyBarIconOverrides(withUserKey, 1.5)
+  assert.ok(/^\[bar\]$/m.test(rescaled))
+  assert.ok(/^size-horizontal = 36$/m.test(rescaled))
+  assert.ok(/icon-size = 18 # barcraft/.test(rescaled))
+
+  const betweenSections =
+    "[font]\nbase-size = 12\n\n" +
+    "[bar] # barcraft\n" +
+    "icon-size = 15 # barcraft\n\n" +
+    "[osd]\nheight = 40\n"
+  assert.strictEqual(
+    P.applyBarIconOverrides(betweenSections, 1.0),
+    "[font]\nbase-size = 12\n\n[osd]\nheight = 40\n"
+  )
+})
+
+test("isOwnedUpdateHook recognizes only Barcraft-created hook scripts", () => {
+  const owned = "#!/bin/bash\n" + P.HOOK_OWNED_MARKER + "\n# note\necho hi\n"
+  const legacyOwned = "#!/bin/bash\n# Added by Barcraft (thepixelgardener.barcraft). Turn off to remove.\necho hi\n"
+  const userOwned = "#!/bin/bash\n# My personal barcraft-sync hook\necho custom\n"
+  const empty = ""
+  assert.strictEqual(P.isOwnedUpdateHook(owned), true)
+  assert.strictEqual(P.isOwnedUpdateHook(legacyOwned), true)
+  assert.strictEqual(P.isOwnedUpdateHook(userOwned), false)
+  assert.strictEqual(P.isOwnedUpdateHook(empty), false)
+})
+
+test("resolveSaveTarget prevents silent overwrite on slug collisions and prompts on name clash", () => {
+  const existing = [
+    { id: "my-skin", name: "My Skin" },
+    { id: "my-skin-2", name: "My Skin?" }
+  ]
+  const builtinTaken = slug => slug === "islands" || slug === "statusline"
+
+  // Distinct display name whose slug collides with "my-skin" and "my-skin-2":
+  // must allocate a fresh slug instead of overwriting either existing skin.
+  const distinct = P.resolveSaveTarget("my skin!", existing, "floating", builtinTaken, false)
+  assert.deepStrictEqual(distinct, { slug: "my-skin-3", overwrite: false, needsConfirm: false, conflictName: "" })
+
+  // Exact same display name as the currently active skin updates in place.
+  const activeUpdate = P.resolveSaveTarget("My Skin", existing, "my-skin", builtinTaken, false)
+  assert.deepStrictEqual(activeUpdate, { slug: "my-skin", overwrite: true, needsConfirm: false, conflictName: "" })
+
+  // Exact same display name as a different existing skin requires confirmation first.
+  const clash = P.resolveSaveTarget("My Skin", existing, "floating", builtinTaken, false)
+  assert.deepStrictEqual(clash, { slug: "my-skin", overwrite: false, needsConfirm: true, conflictName: "My Skin" })
+
+  // Confirmed overwrite targets the matched skin explicitly.
+  const confirmed = P.resolveSaveTarget("My Skin", existing, "floating", builtinTaken, true)
+  assert.deepStrictEqual(confirmed, { slug: "my-skin", overwrite: true, needsConfirm: false, conflictName: "" })
+
+  // Built-in name collision gets -custom suffix without overwriting built-ins.
+  const builtinClash = P.resolveSaveTarget("Islands", existing, "floating", builtinTaken, false)
+  assert.deepStrictEqual(builtinClash, { slug: "islands-custom", overwrite: false, needsConfirm: false, conflictName: "" })
+})
+
 test("theme colors parse with every key mapped", () => {
   const text = "accent = \"#7aa2f7\"\nblue = \"#7aa2f7\"\nbackground = '1a1b26'\n"
   assert.deepStrictEqual(Object.assign({}, P.themeColorMap(text)), { accent: "#7aa2f7", blue: "#7aa2f7", background: "#1a1b26" })

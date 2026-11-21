@@ -40,6 +40,7 @@ Column {
   property bool statusError: false
   property string renamingId: ""
   property string confirmDeleteId: ""
+  property string confirmOverwriteName: ""
   property string pendingPreview: ""
 
   property bool keyboardMode: false
@@ -111,6 +112,7 @@ Column {
     keyboardMode = false
     renamingId = ""
     confirmDeleteId = ""
+    confirmOverwriteName = ""
     pendingPreview = ""
     previewTimer.stop()
     if (engine) engine.clearPreview()
@@ -218,9 +220,26 @@ Column {
     restoreKeys()
   }
 
+  Timer {
+    id: overwriteTimer
+    interval: 4000
+    repeat: false
+    onTriggered: root.confirmOverwriteName = ""
+  }
+
   function saveSkin() {
     if (!engine) return
-    engine.saveUserSkin(nameField.text || engine.committedSkin.name)
+    var wanted = nameField.text || engine.committedSkin.name
+    var confirmed = confirmOverwriteName !== "" && confirmOverwriteName === wanted
+    var res = engine.saveUserSkin(wanted, confirmed)
+    if (res && res.needsConfirm) {
+      confirmOverwriteName = wanted
+      overwriteTimer.restart()
+      showStatus(tr("status.confirmOverwrite").arg(res.conflictName), true)
+      return
+    }
+    confirmOverwriteName = ""
+    overwriteTimer.stop()
     nameField.text = ""
   }
 

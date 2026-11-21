@@ -396,7 +396,8 @@ Item {
     next[key] = value
     prefs = SkinParser.normalizePrefs(next)
     persistDebounce.restart()
-    if (key === "omarchyMenu" || key === "updateCheck") Qt.callLater(engine.syncIntegration)
+    if (key === "omarchyMenu") Qt.callLater(engine.syncMenu)
+    else if (key === "updateCheck") Qt.callLater(engine.syncUpdateHook)
   }
 
   function resetToPreset() {
@@ -451,29 +452,38 @@ Item {
     userSkins = updated
   }
 
-  function saveUserSkin(rawName) {
+  function saveUserSkin(rawName, forceOverwrite) {
     var cleanName = SkinParser.sanitizeLabel(rawName, 40)
     if (!cleanName) cleanName = committedSkin.name || "Custom"
-    var slug = slugForName(cleanName, "", false)
+    var target = SkinParser.resolveSaveTarget(cleanName, userSkins, activeSkinId, builtinIdTaken, !!forceOverwrite)
+    if (target.needsConfirm) {
+      return { ok: false, needsConfirm: true, slug: target.slug, conflictName: target.conflictName }
+    }
+    var slug = target.slug
+    var dest = skinPath(slug)
     var toSave = SkinParser.normalizeSkin(committedSkin, slug, "user")
     toSave.id = slug
     toSave.name = cleanName
     toSave.source = "user"
-    toSave.path = skinPath(slug)
+    toSave.path = dest
 
-    writeFile(skinPath(slug), SkinParser.serializeToml(toSave), function(ok) {
-      engine.notice(ok ? "status.saved" : "status.saveFailed", slug, !ok)
-    })
-    replaceUserSkin(slug, toSave)
-    clearPreview()
-    standard = false
-    activeSkinId = slug
-    hasCustomDraft = false
-    customSkin = toSave
-    if (themeSkin) followTheme = false
-    revision++
-    persistState()
-    return slug
+    writeFile(dest, SkinParser.serializeToml(toSave), function(ok, code) {
+      if (!ok) {
+        engine.notice(code === 2 ? "status.saveExists" : "status.saveFailed", slug, true)
+        return
+      }
+      engine.replaceUserSkin(slug, toSave)
+      engine.clearPreview()
+      engine.standard = false
+      engine.activeSkinId = slug
+      engine.hasCustomDraft = false
+      engine.customSkin = toSave
+      if (engine.themeSkin) engine.followTheme = false
+      engine.revision++
+      engine.persistState()
+      engine.notice("status.saved", slug, false)
+    }, { noClobber: !target.overwrite })
+    return { ok: true, needsConfirm: false, slug: slug, conflictName: "" }
   }
 
   function renameUserSkin(id, rawName) {
@@ -489,26 +499,30 @@ Item {
     renamed.name = cleanName
     renamed.source = "user"
     renamed.path = skinPath(slug)
-    writeFile(renamed.path, SkinParser.serializeToml(renamed), function(ok) {
+    var sameFile = oldPath === renamed.path
+    var removeOld = (!sameFile && SkinParser.isSafeSkinPath(oldPath, [engine.userSkinsDir, engine.legacySkinsDir])) ? oldPath : ""
+
+    // Write and byte-verify the replacement file on disk before unlinking the
+    // original or committing the new id to state.
+    writeFile(renamed.path, SkinParser.serializeToml(renamed), function(ok, code) {
       if (!ok) {
-        engine.notice("status.saveFailed", slug, true)
+        engine.notice(code === 2 ? "status.saveExists" : "status.saveFailed", slug, true)
         return
       }
-      if (oldPath !== renamed.path && SkinParser.isSafeSkinPath(oldPath, [engine.userSkinsDir, engine.legacySkinsDir])) {
-        engine.runCommand(["rm", "-f", "--", oldPath])
+      engine.replaceUserSkin(id, renamed)
+      if (engine.activeSkinId === id) {
+        engine.activeSkinId = slug
+        if (!engine.hasCustomDraft) engine.customSkin = renamed
       }
+      var mons = {}
+      for (var screen in engine.monitorSkins) {
+        mons[screen] = engine.monitorSkins[screen] === id ? slug : engine.monitorSkins[screen]
+      }
+      engine.monitorSkins = mons
+      engine.revision++
+      engine.persistState()
       engine.notice("status.renamed", cleanName, false)
-    })
-    replaceUserSkin(id, renamed)
-    if (activeSkinId === id) {
-      activeSkinId = slug
-      if (!hasCustomDraft) customSkin = renamed
-    }
-    var mons = {}
-    for (var screen in monitorSkins) mons[screen] = monitorSkins[screen] === id ? slug : monitorSkins[screen]
-    monitorSkins = mons
-    revision++
-    persistState()
+    }, { noClobber: !sameFile, removeAfter: removeOld })
     return slug
   }
 
@@ -676,34 +690,166 @@ Item {
     onTriggered: engine.loadState()
   }
 
-  // Each write gets its own FileView: concurrent writes never cancel each
-  // other, and atomic writes never leave a half-written file behind.
+  // Atomic POSIX file write via mktemp + mv in the destination directory,
+  // verified byte-for-byte on disk before reporting success or removing an
+  // old renamed file (never relies on Quickshell FileView's `saved` signal).
   Component {
-    id: fileWriter
-    FileView {
-      atomicWrites: true
-      printErrors: false
-      watchChanges: false
-      preload: false
+    id: atomicWriteProc
+    Item {
+      id: job
+      visible: false
+      property var command: []
+      property var callback: null
+      property bool finished: false
+      function start() {
+        proc.running = true
+        watchdog.start()
+      }
+      Timer {
+        id: watchdog
+        interval: 8000
+        repeat: false
+        onTriggered: {
+          if (job.finished) return
+          job.finished = true
+          proc.running = false
+          if (job.callback) job.callback(false, -1)
+          job.destroy()
+        }
+      }
+      Process {
+        id: proc
+        command: job.command
+        onExited: function(code, status) {
+          if (job.finished) return
+          job.finished = true
+          watchdog.stop()
+          if (job.callback) job.callback(code === 0, code)
+          job.destroy()
+        }
+      }
     }
   }
 
-  function writeFile(filePath, content, done) {
-    var fv = fileWriter.createObject(engine, { path: filePath })
-    if (!fv) {
-      if (done) done(false)
+  function writeFile(filePath, content, done, options) {
+    var opts = options || {}
+    var noClobber = opts.noClobber ? "1" : "0"
+    var chmodExec = opts.chmodExec ? "1" : "0"
+    var removeAfter = String(opts.removeAfter || "")
+    var script =
+      "dest=$1; content=$2; noclobber=$3; mkexec=$4; old=$5; " +
+      "[ -n \"$dest\" ] && [ ! -L \"$dest\" ] || exit 1; " +
+      "if [ \"$noclobber\" = 1 ] && [ -e \"$dest\" ]; then exit 2; fi; " +
+      "dir=$(dirname -- \"$dest\"); " +
+      "mkdir -p -- \"$dir\" || exit 1; " +
+      "tmp=$(mktemp \"$dir/.barcraft.XXXXXX\") || exit 1; " +
+      "trap 'rm -f -- \"$tmp\"' EXIT; " +
+      "printf '%s' \"$content\" > \"$tmp\" || exit 1; " +
+      "if [ \"$mkexec\" = 1 ]; then chmod 0755 -- \"$tmp\" || exit 1; fi; " +
+      "if [ \"$noclobber\" = 1 ]; then " +
+      "  ln -- \"$tmp\" \"$dest\" || exit 2; " +
+      "  rm -f -- \"$tmp\"; " +
+      "else " +
+      "  mv -f -- \"$tmp\" \"$dest\" || exit 1; " +
+      "fi; " +
+      "trap - EXIT; " +
+      "[ ! -L \"$dest\" ] && [ -f \"$dest\" ] || exit 1; " +
+      "printf '%s' \"$content\" | cmp -s -- - \"$dest\" || exit 1; " +
+      "if [ -n \"$old\" ] && [ \"$old\" != \"$dest\" ] && [ ! -L \"$old\" ] && [ -f \"$old\" ]; then " +
+      "  rm -f -- \"$old\" || true; " +
+      "fi"
+    var job = atomicWriteProc.createObject(engine, {
+      command: ["sh", "-c", script, "sh", String(filePath || ""), String(content || ""), noClobber, chmodExec, removeAfter],
+      callback: function(ok, code) {
+        if (!ok) console.warn("Barcraft: could not write " + filePath + " (code " + code + ")")
+        if (done) done(ok, code)
+      }
+    })
+    if (!job) {
+      if (done) done(false, -1)
       return
     }
-    fv.saved.connect(function() {
-      if (done) done(true)
-      fv.destroy()
+    job.start()
+  }
+
+  // Fresh, uncached read of a regular non-symlink file from disk.
+  // Calls done(status, text) with status "ok" | "missing" | "error".
+  Component {
+    id: freshReadProc
+    Item {
+      id: reader
+      visible: false
+      property var command: []
+      property var callback: null
+      property bool finished: false
+      property string captured: ""
+      property bool streamDone: false
+      property bool procExited: false
+      property int exitCode: -1
+
+      function start() {
+        proc.running = true
+        watchdog.start()
+      }
+
+      function maybeFinish() {
+        if (finished || !streamDone || !procExited) return
+        finished = true
+        watchdog.stop()
+        var st = exitCode === 0 ? "ok" : (exitCode === 3 ? "missing" : "error")
+        if (callback) callback(st, st === "ok" ? captured : "")
+        destroy()
+      }
+
+      Timer {
+        id: watchdog
+        interval: 8000
+        repeat: false
+        onTriggered: {
+          if (reader.finished) return
+          reader.finished = true
+          proc.running = false
+          if (reader.callback) reader.callback("error", "")
+          reader.destroy()
+        }
+      }
+
+      Process {
+        id: proc
+        command: reader.command
+        stdout: StdioCollector {
+          waitForEnd: true
+          onStreamFinished: {
+            reader.captured = text
+            reader.streamDone = true
+            reader.maybeFinish()
+          }
+        }
+        onExited: function(code, status) {
+          reader.exitCode = code
+          reader.procExited = true
+          reader.maybeFinish()
+        }
+      }
+    }
+  }
+
+  function readTextFile(filePath, done) {
+    var script =
+      "p=$1; " +
+      "[ -n \"$p\" ] || exit 4; " +
+      "if [ ! -e \"$p\" ] && [ ! -L \"$p\" ]; then exit 3; fi; " +
+      "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ -r \"$p\" ] || exit 4; " +
+      "cat -- \"$p\""
+    var job = freshReadProc.createObject(engine, {
+      command: ["sh", "-c", script, "sh", String(filePath || "")],
+      callback: done
     })
-    fv.saveFailed.connect(function(error) {
-      console.warn("Barcraft: could not write " + filePath + ": " + FileViewError.toString(error))
-      if (done) done(false)
-      fv.destroy()
-    })
-    fv.setText(content)
+    if (!job) {
+      if (done) done("error", "")
+      return
+    }
+    job.start()
   }
 
   // Commands run one after another, never cancelling the one before.
@@ -823,8 +969,8 @@ Item {
   function updateHookScript() {
     return [
       "#!/bin/bash",
-      "# Added by Barcraft (thepixelgardener.barcraft). Turn \"Check after Omarchy",
-      "# updates\" off in Barcraft Studio to remove this file.",
+      SkinParser.HOOK_OWNED_MARKER,
+      "# Turn \"Check after Omarchy updates\" off in Barcraft Studio to remove this file.",
       "plugin=" + shellQuoteSingle(pluginDir),
       "[[ -f $plugin/scripts/sync-upstream.sh ]] || exit 0",
       "if ! bash \"$plugin/scripts/sync-upstream.sh\" --check >/dev/null 2>&1; then",
@@ -834,43 +980,111 @@ Item {
     ].join("\n")
   }
 
-  property bool _menuWanted: false
+  property bool _menuSyncBusy: false
+  property bool _menuSyncAgain: false
+  property bool _hookSyncBusy: false
+  property bool _hookSyncAgain: false
+  property bool _iconSyncBusy: false
+  property bool _iconSyncAgain: false
 
   function syncIntegration() {
     if (!isPrimary || !settled) return
-    _menuWanted = !!prefs.omarchyMenu
-    if (menuView.ready) applyMenu()
-    else menuView.reload()
-    if (prefs.updateCheck) writeFile(updateHookPath, updateHookScript())
-    else runCommand(["rm", "-f", "--", updateHookPath])
+    syncMenu()
+    syncUpdateHook()
   }
 
-  function applyMenu() {
-    var current = menuView.missing ? "" : menuView.text()
-    if (!_menuWanted && current.indexOf("barcraft:begin") < 0) return
-    var next = SkinParser.applyMenuBlock(current, _menuWanted ? menuEntries() : null)
-    if (next !== current) menuView.setText(next)
+  // Always reads the current on-disk omarchy-menu.jsonc before modifying it,
+  // so edits made to other menu entries after Barcraft loaded are preserved.
+  function syncMenu() {
+    if (!isPrimary || !settled) return
+    if (_menuSyncBusy) {
+      _menuSyncAgain = true
+      return
+    }
+    _menuSyncBusy = true
+    _menuSyncAgain = false
+    var want = !!prefs.omarchyMenu
+
+    function finish() {
+      engine._menuSyncBusy = false
+      if (engine._menuSyncAgain) Qt.callLater(engine.syncMenu)
+    }
+
+    readTextFile(menuExtensionPath, function(status, text) {
+      if (status === "error") {
+        finish()
+        return
+      }
+      var current = status === "missing" ? "" : text
+      if (!want && current.indexOf("barcraft:begin") < 0) {
+        finish()
+        return
+      }
+      var next = SkinParser.applyMenuBlock(current, want ? engine.menuEntries() : null)
+      if (next === current) {
+        finish()
+        return
+      }
+      writeFile(menuExtensionPath, next, function() { finish() })
+    })
   }
 
-  FileView {
-    id: menuView
-    property bool ready: false
-    property bool missing: false
-    path: engine.isPrimary ? engine.menuExtensionPath : ""
-    atomicWrites: true
-    printErrors: false
-    watchChanges: false
-    onLoaded: {
-      ready = true
-      missing = false
-      if (engine.settled) engine.applyMenu()
+  // Verifies Barcraft's ownership marker before overwriting or removing
+  // post-update.d/barcraft-sync so a user-maintained hook is never touched.
+  function syncUpdateHook() {
+    if (!isPrimary || !settled) return
+    if (_hookSyncBusy) {
+      _hookSyncAgain = true
+      return
     }
-    onLoadFailed: function(error) {
-      // Never write over a menu file we could not read.
-      ready = error === FileViewError.FileNotFound
-      missing = ready
-      if (ready && engine.settled) engine.applyMenu()
+    _hookSyncBusy = true
+    _hookSyncAgain = false
+    var want = !!prefs.updateCheck
+
+    function finish() {
+      engine._hookSyncBusy = false
+      if (engine._hookSyncAgain) Qt.callLater(engine.syncUpdateHook)
     }
+
+    readTextFile(updateHookPath, function(status, text) {
+      if (!want) {
+        if (status === "ok" && SkinParser.isOwnedUpdateHook(text)) {
+          var rmScript =
+            "p=$1; m=$2; " +
+            "[ ! -L \"$p\" ] && [ -f \"$p\" ] && head -n 6 -- \"$p\" | grep -qF -- \"$m\" && rm -f -- \"$p\""
+          runCommand(["sh", "-c", rmScript, "sh", updateHookPath, SkinParser.HOOK_OWNED_MARKER])
+        }
+        finish()
+        return
+      }
+
+      if (status === "missing") {
+        writeFile(updateHookPath, engine.updateHookScript(), function() { finish() }, { noClobber: true, chmodExec: true })
+        return
+      }
+      if (status === "ok" && SkinParser.isOwnedUpdateHook(text)) {
+        var desired = engine.updateHookScript()
+        if (text === desired) {
+          finish()
+          return
+        }
+        writeFile(updateHookPath, desired, function() { finish() }, { chmodExec: true })
+        return
+      }
+
+      // Existing file is unreadable, a symlink, or user-maintained: leave it
+      // untouched and revert the toggle so the UI reflects reality.
+      console.warn("Barcraft: keeping existing " + updateHookPath + " (not created by Barcraft)")
+      if (engine.prefs.updateCheck) {
+        var nextPrefs = {}
+        for (var k in engine.prefs) nextPrefs[k] = engine.prefs[k]
+        nextPrefs.updateCheck = false
+        engine.prefs = SkinParser.normalizePrefs(nextPrefs)
+        engine.persistDebounce.restart()
+      }
+      engine.notice("status.hookConflict", "post-update.d/barcraft-sync", true)
+      finish()
+    })
   }
 
   // A plain-text health report: `omarchy-shell barcraft doctor`.
@@ -914,35 +1128,39 @@ Item {
     onTriggered: engine.applyIconScale()
   }
 
-  FileView {
-    id: userShellView
-    property bool ready: false
-    property bool missing: false
-    path: engine.isPrimary ? engine.userShellTomlPath : ""
-    watchChanges: true
-    atomicWrites: true
-    printErrors: false
-    onLoaded: {
-      ready = true
-      missing = false
-    }
-    onLoadFailed: function(error) {
-      // Unreadable is not the same as absent: never write over a file we
-      // could not read.
-      ready = error === FileViewError.FileNotFound
-      missing = ready
-    }
-    onFileChanged: reload()
-  }
-
   function applyIconScale() {
-    if (!isPrimary || !settled || !userShellView.ready) return
-    var current = userShellView.missing ? "" : userShellView.text()
-    var reset = Math.abs(committedIconScale - 1) < 0.001
-    if (reset && current.indexOf("# barcraft") < 0) return
-    var next = SkinParser.applyBarIconOverrides(current, committedIconScale)
-    if (next === current) return
-    userShellView.setText(next)
+    if (!isPrimary || !settled) return
+    if (_iconSyncBusy) {
+      _iconSyncAgain = true
+      return
+    }
+    _iconSyncBusy = true
+    _iconSyncAgain = false
+    var targetScale = committedIconScale
+    var reset = Math.abs(targetScale - 1) < 0.001
+
+    function finish() {
+      engine._iconSyncBusy = false
+      if (engine._iconSyncAgain) Qt.callLater(engine.applyIconScale)
+    }
+
+    readTextFile(userShellTomlPath, function(status, text) {
+      if (status === "error") {
+        finish()
+        return
+      }
+      var current = status === "missing" ? "" : text
+      if (reset && current.indexOf("# barcraft") < 0) {
+        finish()
+        return
+      }
+      var next = SkinParser.applyBarIconOverrides(current, targetScale)
+      if (next === current) {
+        finish()
+        return
+      }
+      writeFile(userShellTomlPath, next, function() { finish() })
+    })
   }
 
   // Saved skins from both folders (the current one first, so it wins a name
