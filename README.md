@@ -42,6 +42,8 @@ Barcraft (`thepixelgardener.barcraft`) layers a zero-motion skin engine and keyb
 
 Requires **Omarchy 4 (Quattro)** with the Quickshell bar. No external dependencies or elevated privileges are required.
 
+> **Barcraft replaces the bar.** Omarchy runs one bar at a time, so Barcraft can't run together with other bar plugins such as Station. A bar plugin's other features (services, widgets) only load while it is the active bar.
+
 ```bash
 omarchy plugin add https://github.com/thepixelgardener-create/barcraft --enable
 omarchy bar use thepixelgardener.barcraft
