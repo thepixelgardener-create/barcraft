@@ -189,6 +189,31 @@ test("isPristineUpdateHook accepts only an unedited Barcraft hook", () => {
   assert.strictEqual(P.isPristineUpdateHook("#!/bin/bash\necho custom\n", md5, []), false)
 })
 
+test("an untouched 0.5.0 hook stays Barcraft's after the language changes", () => {
+  const md5 = text => require("crypto").createHash("md5").update(text, "utf8").digest("hex")
+  const dir = "/home/me/.config/omarchy/plugins/thepixelgardener.barcraft"
+  // Byte for byte what 0.5.0 wrote with Omarchy set to German.
+  const german050 = [
+    "#!/bin/bash",
+    "# Added by Barcraft (thepixelgardener.barcraft). Turn \"Check after Omarchy",
+    "# updates\" off in Barcraft Studio to remove this file.",
+    "plugin='" + dir + "'",
+    "[[ -f $plugin/scripts/sync-upstream.sh ]] || exit 0",
+    "if ! bash \"$plugin/scripts/sync-upstream.sh\" --check >/dev/null 2>&1; then",
+    "  omarchy-notification-send -g '󰍜' Barcraft 'Omarchy hat seine Leiste aktualisiert. Führe scripts/sync-upstream.sh im Barcraft-Ordner aus, um das Update zu übernehmen.'",
+    "fi",
+    ""
+  ].join("\n")
+  const legacy = P.legacyUpdateHookScripts(dir)
+  assert.strictEqual(P.isPristineUpdateHook(german050, md5, legacy), true)
+  assert.strictEqual(P.isPristineUpdateHook(german050.replace("Führe", "Starte"), md5, legacy), false)
+  assert.strictEqual(P.isPristineUpdateHook(german050, md5, P.legacyUpdateHookScripts("/elsewhere")), false)
+
+  // Today's hook in English is pristine; the language it was written in doesn't matter.
+  const current = P.updateHookScript(dir, "Omarchy updated its bar.", md5)
+  assert.strictEqual(P.isPristineUpdateHook(current, md5, legacy), true)
+})
+
 test("resolveSaveTarget prevents silent overwrite on slug collisions and prompts on name clash", () => {
   const existing = [
     { id: "my-skin", name: "My Skin" },
@@ -418,6 +443,186 @@ test("neutralizeMarkup breaks markup-shaped input for shared tooltip/OSD sinks",
   assert.ok(!/<img\b/i.test(safe))
   assert.ok(!/<b>/i.test(safe))
   assert.strictEqual(safe.replace(/\u200b/g, ""), tracker)
+})
+
+test("parseSkinLibrary resolves custom preset inheritance in one pass regardless of file order", () => {
+  const dirs = ["/demo/skins", "/demo/legacy-skins"]
+  const rows = [
+    { path: "/demo/skins/a-grandchild.toml", text: "[bar-skin]\nname = \"Grandchild\"\npreset = \"b-child\"\nradius = 20\n" },
+    { path: "/demo/skins/b-child.toml", text: "[bar-skin]\nname = \"Child\"\npreset = \"z-parent\"\nwidget-style = \"pills\"\n" },
+    { path: "/demo/skins/z-parent.toml", text: "[bar-skin]\nname = \"Parent\"\npreset = \"islands\"\nheight = 48\n" },
+    { path: "/demo/legacy-skins/z-parent.toml", text: "[bar-skin]\nname = \"Stale Legacy\"\nheight = 24\n" },
+    { path: "/demo/skins/../escape.toml", text: "[bar-skin]\nname = \"Evil\"\nheight = 50\n" }
+  ]
+  const skins = P.parseSkinLibrary(rows, dirs, P.builtinSkins())
+  assert.strictEqual(skins.length, 3)
+  const byId = Object.fromEntries(skins.map(s => [s.id, s]))
+  assert.strictEqual(byId["z-parent"].name, "Parent")
+  assert.strictEqual(byId["z-parent"].mode, "islands")
+  assert.strictEqual(byId["z-parent"].height, 48)
+  assert.strictEqual(byId["b-child"].height, 48)
+  assert.strictEqual(byId["b-child"].mode, "islands")
+  assert.strictEqual(byId["b-child"].widgetStyle, "pills")
+  assert.strictEqual(byId["a-grandchild"].height, 48)
+  assert.strictEqual(byId["a-grandchild"].mode, "islands")
+  assert.strictEqual(byId["a-grandchild"].widgetStyle, "pills")
+  assert.strictEqual(byId["a-grandchild"].radius, 20)
+})
+
+test("parseSkinLibrary breaks preset cycles and lets a user file inherit from a same-named built-in", () => {
+  const dirs = ["/demo/skins"]
+  const rows = [
+    { path: "/demo/skins/loop-a.toml", text: "[bar-skin]\nname = \"Loop A\"\npreset = \"loop-b\"\nheight = 36\n" },
+    { path: "/demo/skins/loop-b.toml", text: "[bar-skin]\nname = \"Loop B\"\npreset = \"loop-a\"\nradius = 14\n" },
+    { path: "/demo/skins/islands.toml", text: "[bar-skin]\nname = \"My Islands\"\npreset = \"islands\"\nheight = 42\n" }
+  ]
+  const skins = P.parseSkinLibrary(rows, dirs, P.builtinSkins())
+  const byId = Object.fromEntries(skins.map(s => [s.id, s]))
+  assert.strictEqual(byId["loop-a"].height, 36)
+  assert.strictEqual(byId["loop-b"].radius, 14)
+  assert.strictEqual(byId["islands"].mode, "islands")
+  assert.strictEqual(byId["islands"].height, 42)
+  assert.strictEqual(byId["islands"].blur, true)
+})
+
+test("classifySkinWatchEvent handles edits, renames, temp files, and created/removed skin dirs", () => {
+  const userDir = "/home/u/.config/omarchy/bar/skins"
+  const legacyDir = "/home/u/.config/omarchy/bar-skins"
+  const cfgDir = "/home/u/.config/omarchy"
+
+  assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|CLOSE_WRITE,CLOSE|neon.toml", userDir, legacyDir, cfgDir), "rescan")
+  assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|MOVED_TO|shared.toml", userDir, legacyDir, cfgDir), "rescan")
+  assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|MOVED_FROM|old.toml", userDir, legacyDir, cfgDir), "rescan")
+  assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|DELETE|old.toml", userDir, legacyDir, cfgDir), "rescan")
+  assert.strictEqual(P.classifySkinWatchEvent(legacyDir + "/|CREATE|legacy.toml", userDir, legacyDir, cfgDir), "rescan")
+
+  // Temp files and unrelated config changes never trigger rescans.
+  assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|CLOSE_WRITE,CLOSE|.barcraft.abc123", userDir, legacyDir, cfgDir), "ignore")
+  assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|CREATE|.neon.toml.swp", userDir, legacyDir, cfgDir), "ignore")
+  assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|CLOSE_WRITE,CLOSE|notes.txt", userDir, legacyDir, cfgDir), "ignore")
+  assert.strictEqual(P.classifySkinWatchEvent(cfgDir + "/|CLOSE_WRITE,CLOSE|shell.json", userDir, legacyDir, cfgDir), "ignore")
+
+  // Skin folder creation or removal re-attaches the watcher and rescans.
+  assert.strictEqual(P.classifySkinWatchEvent(cfgDir + "/|CREATE,ISDIR|bar", userDir, legacyDir, cfgDir), "rewatch")
+  assert.strictEqual(P.classifySkinWatchEvent(cfgDir + "/|CREATE,ISDIR|bar-skins", userDir, legacyDir, cfgDir), "rewatch")
+  assert.strictEqual(P.classifySkinWatchEvent(cfgDir + "/bar/|CREATE,ISDIR|skins", userDir, legacyDir, cfgDir), "rewatch")
+  assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|DELETE_SELF|", userDir, legacyDir, cfgDir), "rewatch")
+  assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|MOVE_SELF|", userDir, legacyDir, cfgDir), "rewatch")
+})
+
+test("SkinEngine handlers: single-pass scan, per-monitor zone sizing, and one-step paste undo", () => {
+  const fs = require("fs")
+  const vm = require("vm")
+  const qml = fs.readFileSync(path.join(__dirname, "..", "SkinEngine.qml"), "utf8")
+  const processText = qml.slice(qml.indexOf("id: scanProc"))
+  const scanHandler = processText.match(/onStreamFinished: \{\n([\s\S]*?)\n      \}\n    \}\n/)[1]
+  function method(name) {
+    const re = new RegExp("^  (function " + name + "\\([^\\n]*\\) \\{[\\s\\S]*?^  \\})", "m")
+    const m = qml.match(re)
+    assert.ok(m, "missing method " + name + " in SkinEngine.qml")
+    return m[1]
+  }
+
+  const notices = []
+  let persists = 0
+  const ctx = vm.createContext({
+    SkinParser: P,
+    console,
+    userSkins: [],
+    builtinSkins: P.builtinSkins(),
+    userSkinsDir: "/demo/skins",
+    legacySkinsDir: "/demo/legacy-skins",
+    revision: 0,
+    standard: false,
+    followTheme: false,
+    themeSkin: null,
+    activeSkinId: "statusline",
+    hasCustomDraft: false,
+    customSkin: P.defaultSkin(),
+    pasteUndoSnapshot: null,
+    previewSkin: null,
+    previewScreen: "",
+    vertical: false,
+    monitorSkins: { "DP-2": "child" },
+    Style: { bar: { sizeHorizontal: 30, sizeVertical: 28 }, space: x => x, gapsOut: 6 },
+    strings: { t: k => k === "label.standard" ? "Omarchy standard" : k },
+    persistState: () => { persists++ },
+    notice: (key, arg, isError) => { notices.push({ key, arg, isError }) },
+    text: JSON.stringify([
+      { path: "/demo/skins/child.toml", text: "[bar-skin]\nname = \"Child\"\npreset = \"base\"\n" },
+      { path: "/demo/skins/base.toml", text: "[bar-skin]\nname = \"Base\"\nheight = 48\nedge-margin = 8\n" }
+    ])
+  })
+  Object.defineProperty(ctx, "usingThemeSkin", {
+    get() { return ctx.followTheme && ctx.themeSkin !== null && !ctx.hasCustomDraft }
+  })
+  Object.defineProperty(ctx, "committedSkin", {
+    get() {
+      if (ctx.hasCustomDraft && ctx.customSkin) return ctx.customSkin
+      if (ctx.followTheme && ctx.themeSkin) return ctx.themeSkin
+      return ctx.findSkinById(ctx.activeSkinId) || P.defaultSkin()
+    }
+  })
+  Object.defineProperty(ctx, "activeSkin", {
+    get() { return (ctx.previewSkin && ctx.previewScreen === "") ? ctx.previewSkin : ctx.committedSkin }
+  })
+  Object.defineProperty(ctx, "standardActive", {
+    get() { return ctx.standard && !(ctx.previewSkin && ctx.previewScreen === "") }
+  })
+
+  const fns = [
+    "findSkinById", "monitorSkinFor", "skinForScreen", "barSizePxOf", "edgePxOf", "zoneFor",
+    "clearPreview", "clearPasteUndo", "currentName", "importText", "undoPaste", "selectSkin", "resetToPreset"
+  ]
+  vm.runInContext("var engine = this;\n" + fns.map(method).join("\n"), ctx)
+
+  // 1) First scan resolves child -> base in one pass even when child precedes base.
+  vm.runInContext("(function(){" + scanHandler + "})()", ctx)
+  assert.strictEqual(ctx.userSkins.length, 2)
+  assert.strictEqual(ctx.findSkinById("child").height, 48)
+  assert.strictEqual(ctx.revision, 1)
+  // Re-scanning identical files does not bump revision.
+  vm.runInContext("(function(){" + scanHandler + "})()", ctx)
+  assert.strictEqual(ctx.revision, 1)
+
+  // 2) Secondary monitor zone uses that monitor's committed skin size, and hovering a preview leaves it alone.
+  assert.strictEqual(ctx.zoneFor("DP-1").sizePx, 26)
+  assert.strictEqual(ctx.zoneFor("DP-2").sizePx, 48)
+  assert.strictEqual(ctx.zoneFor("DP-2").edgePx, 8)
+  ctx.previewScreen = "DP-2"
+  ctx.previewSkin = P.normalizeSkin({ id: "prev", name: "Prev", height: 34 }, "prev", "custom")
+  assert.strictEqual(ctx.skinForScreen("DP-2").height, 34)
+  assert.strictEqual(ctx.zoneFor("DP-2").sizePx, 48)
+
+  // 3) Paste saves previous draft and Undo paste restores it verbatim.
+  ctx.customSkin = P.normalizeSkin({ id: "floating", name: "Tuned Draft", height: 40, radius: 18 }, "floating", "custom")
+  ctx.hasCustomDraft = true
+  ctx.importText("[bar-skin]\nname = \"Shared\"\nheight = 24\nradius = 2\n")
+  assert.strictEqual(ctx.committedSkin.name, "Shared")
+  assert.strictEqual(ctx.committedSkin.height, 24)
+  assert.ok(ctx.pasteUndoSnapshot !== null)
+
+  // Invalid paste leaves undo snapshot intact.
+  ctx.importText("not a skin")
+  assert.strictEqual(ctx.committedSkin.name, "Shared")
+  assert.ok(ctx.pasteUndoSnapshot !== null)
+
+  // Undo paste restores the tuned draft.
+  assert.strictEqual(ctx.undoPaste(), true)
+  assert.strictEqual(ctx.hasCustomDraft, true)
+  assert.strictEqual(ctx.committedSkin.name, "Tuned Draft")
+  assert.strictEqual(ctx.committedSkin.height, 40)
+  assert.strictEqual(ctx.committedSkin.radius, 18)
+  assert.strictEqual(ctx.pasteUndoSnapshot, null)
+  assert.strictEqual(notices[notices.length - 1].key, "status.pasteUndone")
+  assert.strictEqual(notices[notices.length - 1].arg, "Tuned Draft")
+
+  // Selecting another skin clears undo snapshot.
+  ctx.importText("[bar-skin]\nname = \"Shared 2\"\nheight = 28\n")
+  assert.ok(ctx.pasteUndoSnapshot !== null)
+  ctx.selectSkin("islands")
+  assert.strictEqual(ctx.pasteUndoSnapshot, null)
+  assert.ok(persists > 0)
 })
 
 console.log("SkinParser: " + passed + " tests passed")

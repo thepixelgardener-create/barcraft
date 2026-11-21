@@ -515,12 +515,20 @@ Column {
       // Saved skins (~/.config/omarchy/bar/skins/*.toml)
       RowLayout {
         width: parent.width
-        spacing: Style.spacing.md
+        spacing: Style.spacing.sm
 
         O.PanelSectionHeader {
           Layout.fillWidth: true
           foreground: root.fg
           text: root.tr("section.user", "Your skins")
+        }
+
+        ActionButton {
+          navKey: "undoPasteSkins"
+          visible: !!root.engine && root.engine.canUndoPaste
+          text: root.tr("action.undoPaste", "Undo paste")
+          iconText: "󰕌"
+          onTriggered: if (root.engine) root.engine.undoPaste()
         }
 
         ActionButton {
@@ -1119,6 +1127,22 @@ Column {
         iconText: "󰜉"
         onTriggered: if (root.engine) root.engine.resetToPreset()
       }
+    }
+
+    RowLayout {
+      width: parent.width
+      spacing: Style.spacing.sm
+      visible: !!root.engine && root.engine.canUndoPaste
+
+      ActionButton {
+        navKey: "undoPaste"
+        inFooter: true
+        text: root.tr("action.undoPaste", "Undo paste")
+        iconText: "󰕌"
+        onTriggered: if (root.engine) root.engine.undoPaste()
+      }
+
+      Item { Layout.fillWidth: true }
     }
   }
 

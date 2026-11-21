@@ -217,16 +217,23 @@ Item {
     return JSON.parse(JSON.stringify(root.layoutConfig || {}))
   }
 
-  function bindPluginBarApi(api) {
+  function pluginBarApiKey(pluginId, barWindow) {
+    var key = String(pluginId || "")
+    if (!key) return ""
+    var screenName = barWindow && barWindow.screen ? String(barWindow.screen.name || "") : ""
+    return screenName ? (key + "@" + screenName) : key
+  }
+
+  function bindPluginBarApi(api, barWindow) {
     if (!api) return
-    api.foreground = Qt.binding(function() { return root.foreground })
-    api.barForeground = Qt.binding(function() { return root.barForeground })
-    api.background = Qt.binding(function() { return root.background })
+    api.foreground = Qt.binding(function() { return barWindow && barWindow.panelBar ? barWindow.panelBar.foreground : root.foreground })
+    api.barForeground = Qt.binding(function() { return barWindow && barWindow.panelBar ? barWindow.panelBar.barForeground : root.barForeground })
+    api.background = Qt.binding(function() { return barWindow && barWindow.panelBar ? barWindow.panelBar.background : root.background })
     api.urgent = Qt.binding(function() { return root.urgent })
     api.fontFamily = Qt.binding(function() { return root.fontFamily })
     api.position = Qt.binding(function() { return root.position })
     api.vertical = Qt.binding(function() { return root.vertical })
-    api.barSize = Qt.binding(function() { return root.barSize })
+    api.barSize = Qt.binding(function() { return barWindow && barWindow.panelBar ? barWindow.panelBar.barSize : root.barSize })
     api.transparent = Qt.binding(function() { return root.transparent })
     api.foregroundAnimationEnabled = Qt.binding(function() { return root.foregroundAnimationEnabled })
     api.traySectionDragActive = Qt.binding(function() { return root.traySectionDragActive })
@@ -317,25 +324,35 @@ Item {
     root.unmarkPluginObject(pluginId, target, "clickTarget")
   }
 
+  function syncPluginBarApisForPlugin(pluginId) {
+    var key = String(pluginId || "")
+    if (!key) return
+    for (var cacheKey in pluginBarApis) {
+      var api = pluginBarApis[cacheKey]
+      if (api && api.pluginId === key) root.syncPluginBarApiObjects(api)
+    }
+  }
+
   // A plugin may read api.activePopout right after asking for its popout, so
   // its own api is brought up to date inline; everyone else waits for the
   // coalesced resync.
   function requestPluginPopout(pluginId, owner) {
     if (!root.markPluginObject(pluginId, owner, "popout")) return
     root.requestPopout(owner)
-    root.syncPluginBarApiObjects(pluginBarApis[String(pluginId || "")])
+    root.syncPluginBarApisForPlugin(pluginId)
   }
 
   function releasePluginPopout(pluginId, owner) {
     if (!root.pluginOwnsBarObject(pluginId, owner)) return
     root.releasePopout(owner)
     root.unmarkPluginObject(pluginId, owner, "popout")
-    root.syncPluginBarApiObjects(pluginBarApis[String(pluginId || "")])
+    root.syncPluginBarApisForPlugin(pluginId)
   }
 
-  function pluginBarApiFor(pluginId, moduleName, registered) {
+  function pluginBarApiFor(pluginId, moduleName, registered, barWindow) {
     var key = String(pluginId || "")
     if (!key) return null
+    var cacheKey = root.pluginBarApiKey(key, barWindow)
 
     var pluginShell = null
     if (registered && root.shell && typeof root.shell.pluginShellForId === "function") {
@@ -349,9 +366,9 @@ Item {
       pluginShell = root.shell.pluginShellForBarEntry(key, moduleName)
     }
 
-    if (pluginBarApis[key]) {
-      pluginBarApis[key].shell = pluginShell
-      return pluginBarApis[key]
+    if (pluginBarApis[cacheKey]) {
+      pluginBarApis[cacheKey].shell = pluginShell
+      return pluginBarApis[cacheKey]
     }
 
     var api = pluginBarApiComponent.createObject(null, {
@@ -375,19 +392,19 @@ Item {
       _run: function(command) { root.run(command) }
     })
     if (!api) return null
-    root.bindPluginBarApi(api)
+    root.bindPluginBarApi(api, barWindow)
 
     var next = ({})
     for (var id in pluginBarApis) next[id] = pluginBarApis[id]
-    next[key] = api
+    next[cacheKey] = api
     pluginBarApis = next
     return api
   }
 
-  function pluginBarApiUsed(pluginId) {
+  function pluginBarApiUsed(cacheKey) {
     for (var i = 0; i < widgetHosts.length; i++) {
       var host = widgetHosts[i]
-      if (host && host.pluginApiId === pluginId) return true
+      if (host && host.pluginApiCacheKey === cacheKey) return true
     }
     return false
   }
@@ -405,14 +422,21 @@ Item {
 
   function prunePluginBarApis() {
     var next = ({})
+    var keptPluginIds = ({})
+    var dropped = []
     for (var id in pluginBarApis) {
       var api = pluginBarApis[id]
       if (root.pluginBarApiUsed(id)) {
         next[id] = api
+        if (api && api.pluginId) keptPluginIds[api.pluginId] = true
         continue
       }
-      root.releasePluginObjects(id)
-      if (api && typeof api.destroy === "function") api.destroy()
+      dropped.push(api)
+    }
+    for (var i = 0; i < dropped.length; i++) {
+      var stale = dropped[i]
+      if (stale && stale.pluginId && !keptPluginIds[stale.pluginId]) root.releasePluginObjects(stale.pluginId)
+      if (stale && typeof stale.destroy === "function") stale.destroy()
     }
     pluginBarApis = next
   }
@@ -430,9 +454,10 @@ Item {
 
   Component.onDestruction: {
     for (var id in pluginBarApis) {
-      root.releasePluginObjects(id)
-      if (pluginBarApis[id] && typeof pluginBarApis[id].destroy === "function")
-        pluginBarApis[id].destroy()
+      var api = pluginBarApis[id]
+      if (api && api.pluginId) root.releasePluginObjects(api.pluginId)
+      if (api && typeof api.destroy === "function")
+        api.destroy()
     }
     pluginBarApis = ({})
   }
@@ -797,7 +822,8 @@ Item {
   // the cutout is this panel's minimum sensible top-bar height. An
   // intentionally taller bar still wins.
   function thicknessFor(screen) {
-    return thicknessForSize(screen, root.barSize)
+    var size = screen ? skin.zoneFor(screen.name).sizePx : root.barSize
+    return thicknessForSize(screen, size)
   }
 
   function thicknessForSize(screen, size) {
@@ -805,10 +831,11 @@ Item {
     return Math.max(size, BarModel.notchFloor(root.displayCutouts, root.position, screen.name, screen.width, screen.height, screen.devicePixelRatio, root.panelModeFor(screen), Style.bar.notchHeight))
   }
 
-  // Each screen's bar thickness, by screen name: barSize, or more where a notch
-  // floor raises a top bar. Toasts and plugins clear the bar by it; barSize
-  // stays the configured size the widgets are drawn at.
+  // Each screen's bar thickness, by screen name: its skin's barSize, or more
+  // where a notch floor raises a top bar. Toasts and plugins clear the bar by
+  // it; each screen's barSize drives the widgets drawn on that screen.
   readonly property var screenBarSizes: {
+    skin.revision
     var sizes = ({})
     var screens = Quickshell.screens
     for (var i = 0; i < screens.length; i++) sizes[screens[i].name] = root.thicknessFor(screens[i])
@@ -1732,16 +1759,13 @@ Item {
     // instead of growing once the windows are laid out. The wait ends once, for
     // good: when the mode settles it, or after two seconds without one.
     visible: cutoutWaitOver || !cutoutPending
-    // Barcraft: this screen's skin. Its own if it has one, else the main skin;
-    // icon color and height stay shared, since every widget draws with the
-    // one foreground and size the bar publishes.
+    // Barcraft: this screen's skin. Its own if it has one, else the main skin,
+    // so the surface, its widgets and its reserved space agree on this screen.
     SkinLook {
       id: pskin
       skin: root.barcraft.skinForScreen(barWindow.screen ? barWindow.screen.name : "")
       paletteMap: root.barcraft.themeColors
       barGlassy: root.glassy
-      useSharedForeground: true
-      sharedForeground: root.barcraft.effectiveForeground
       standard: root.barcraft.standardFor(barWindow.screen ? barWindow.screen.name : "")
       vertical: root.vertical
     }
@@ -1749,6 +1773,53 @@ Item {
     // What windows make room for comes from the committed skin, so hovering a
     // preview never reflows the tiled windows.
     readonly property var zone: skin.zoneFor(screen ? screen.name : "")
+    readonly property int barSize: pskin.barSizePx
+    readonly property color screenForeground: pskin.effectiveForeground
+    property color screenBarForeground: root.useTransparentForeground ? root.transparentForeground : screenForeground
+    readonly property color screenBackground: pskin.standard ? root.background : pskin.surfaceColor
+    Behavior on screenBarForeground {
+      enabled: root.foregroundAnimationEnabled
+      ColorAnimation { duration: Style.duration(250); easing.type: Easing.OutCubic }
+    }
+
+    // Per-monitor bar facade handed to first-party widgets on this screen so
+    // their size and ink match this screen's skin while every host action
+    // still routes through root.
+    QtObject {
+      id: screenBar
+      readonly property var shell: root.shell
+      readonly property color foreground: barWindow.screenForeground
+      readonly property color barForeground: barWindow.screenBarForeground
+      readonly property color background: barWindow.screenBackground
+      readonly property color urgent: root.urgent
+      readonly property string fontFamily: root.fontFamily
+      readonly property string position: root.position
+      readonly property bool vertical: root.vertical
+      readonly property int barSize: barWindow.barSize
+      readonly property bool transparent: root.transparent
+      readonly property bool barHidden: root.barHidden
+      readonly property bool foregroundAnimationEnabled: root.foregroundAnimationEnabled
+      readonly property bool traySectionDragActive: root.traySectionDragActive
+      readonly property bool traySectionPopoutOpen: root.traySectionPopoutOpen
+      readonly property var activePopout: root.activePopout
+      readonly property var clickTargets: root.clickTargets
+      readonly property var layoutConfig: root.layoutConfig
+      readonly property var screenBarSizes: root.screenBarSizes
+      function barSizeFor(screenName) { return root.barSizeFor(screenName) }
+      function showTooltip(target, text) { root.showTooltip(target, text) }
+      function hideTooltip(target) { root.hideTooltip(target) }
+      function registerClickTarget(target) { root.registerClickTarget(target) }
+      function unregisterClickTarget(target) { root.unregisterClickTarget(target) }
+      function requestPopout(owner) { root.requestPopout(owner) }
+      function releasePopout(owner) { root.releasePopout(owner) }
+      function notePopoutCard(card) { root.notePopoutCard(card) }
+      function popoutCardFor(owner) { return root.popoutCardFor(owner) }
+      function switchPanelFrom(owner, direction) { return root.switchPanelFrom(owner, direction) }
+      function targetBelongsToWindow(target, window) { return root.targetBelongsToWindow(target, window) }
+      function moduleWidgets(id) { return root.moduleWidgets(id) }
+      function run(command) { root.run(command) }
+    }
+    readonly property var panelBar: screenBar
 
     readonly property int edgeGap: pskin.edgePx
     readonly property int sideGap: pskin.sidePx
@@ -1842,8 +1913,9 @@ Item {
       onTriggered: barWindow.cutoutWaitOver = true
     }
 
-    // The same thickness the bar publishes for its screen (screenBarSizes).
-    readonly property int thickness: root.thicknessFor(screen)
+    // Visual strip thickness on this screen: its skin's barSize (including any
+    // live preview), raised by a display notch floor when needed.
+    readonly property int thickness: root.thicknessForSize(screen, barSize)
 
     // The surface spans its screen at all times, transparent past the strip
     // it paints; a drag toggles only its input region. Growing the surface
@@ -2089,7 +2161,7 @@ Item {
         readonly property int padX: Style.space(pskin.innerPadding)
         readonly property bool pills: barWindow.isIslandMode && !pskin.hasArt
 
-        WidgetPool { id: horizontalPool }
+        WidgetPool { id: horizontalPool; window: barWindow }
 
         // Island pill for the left section
         SkinSurface {
@@ -2178,7 +2250,7 @@ Item {
         readonly property int padY: Style.space(pskin.innerPadding)
         readonly property bool pills: barWindow.isIslandMode && !pskin.hasArt
 
-        WidgetPool { id: verticalPool }
+        WidgetPool { id: verticalPool; window: barWindow }
 
         // Island pill for the top (left) section
         SkinSurface {
@@ -2598,19 +2670,20 @@ Item {
     property bool active: true
     property bool besideRight: false
 
+    readonly property int barSize: window && window.barSize > 0 ? window.barSize : root.barSize
     readonly property real beginW: beginList.visible ? Math.max(beginList.width, beginList.implicitWidth) : 0
     readonly property real centerW: centerBox.visible ? Math.max(centerBox.width, centerBox.implicitWidth) : 0
     readonly property real endW: endList.visible ? Math.max(endList.width, endList.implicitWidth) : 0
     readonly property real contentX: root.vertical ? 0 : (centerBox.x - beginW)
-    readonly property real contentSpan: root.vertical ? root.barSize : (beginW + centerW + endW)
+    readonly property real contentSpan: root.vertical ? barSize : (beginW + centerW + endW)
     // Along a vertical bar: where the center sections start and how long they run.
     readonly property real beginH: beginList.visible ? Math.max(beginList.height, beginList.implicitHeight) : 0
     readonly property real centerH: centerBox.visible ? Math.max(centerBox.height, centerBox.implicitHeight) : 0
     readonly property real endH: endList.visible ? Math.max(endList.height, endList.implicitHeight) : 0
     readonly property real contentY: root.vertical ? (centerBox.y - beginH) : 0
-    readonly property real contentLength: root.vertical ? (beginH + centerH + endH) : root.barSize
+    readonly property real contentLength: root.vertical ? (beginH + centerH + endH) : barSize
     implicitWidth: contentSpan
-    implicitHeight: root.vertical ? beginList.height + centerBox.height + endList.height : root.barSize
+    implicitHeight: root.vertical ? beginList.height + centerBox.height + endList.height : barSize
 
     ModuleList {
       id: beginList
@@ -2932,6 +3005,8 @@ Item {
   component WidgetPool: Item {
     id: widgetPool
 
+    // The bar surface owning this pool, so every widget gets its screen's bar.
+    property var window: null
     // Key -> its WidgetHost, and the ModuleSlot showing it.
     property var hosts: ({})
     property var slots: ({})
@@ -3007,7 +3082,10 @@ Item {
     readonly property string customType: root.customModuleType(entry)
     readonly property var registryMetadata: root.barWidgetRegistry.metadataFor(root.canonicalWidgetId(moduleName))
     readonly property bool firstParty: registryMetadata && registryMetadata.firstParty === true
+    readonly property var barWindow: pool ? pool.window : null
+    readonly property int screenBarSize: barWindow && barWindow.barSize > 0 ? barWindow.barSize : root.barSize
     readonly property string pluginApiId: registered ? root.canonicalWidgetId(moduleName) : "bar-entry:" + moduleName
+    readonly property string pluginApiCacheKey: root.pluginBarApiKey(pluginApiId, barWindow)
     // Re-evaluate when the registry mutates (Component reference changes,
     // plugin enabled/disabled, etc.). Reading the `widgets` property creates
     // the binding dependency — the wrapped function call alone wouldn't.
@@ -3025,7 +3103,7 @@ Item {
       if (qmlCustom) return qmlLoader.item
       return componentLoader.item
     }
-    readonly property real widgetWidth: activeItem && activeItem.visible ? (root.vertical ? root.barSize : activeItem.implicitWidth) : 0
+    readonly property real widgetWidth: activeItem && activeItem.visible ? (root.vertical ? screenBarSize : activeItem.implicitWidth) : 0
     readonly property real widgetHeight: activeItem && activeItem.visible ? activeItem.implicitHeight : 0
 
     parent: owner ? owner.widgetHolder : pool
@@ -3106,6 +3184,7 @@ Item {
     }
 
     onActiveItemChanged: Qt.callLater(injectProps)
+    onBarWindowChanged: injectProps()
     onModuleSettingsChanged: injectProps()
     onFixedEdgeChanged: injectProps()
     onInTraySectionChanged: injectProps()
@@ -3118,14 +3197,18 @@ Item {
       if ("fixedEdge" in target) target.fixedEdge = fixedEdge
       if ("inTraySection" in target) target.inTraySection = inTraySection
       if ("bar" in target) target.bar = firstParty
-        ? root : root.pluginBarApiFor(pluginApiId, moduleName, registered)
+        ? (barWindow && barWindow.panelBar ? barWindow.panelBar : root)
+        : root.pluginBarApiFor(pluginApiId, moduleName, registered, barWindow)
       if ("moduleName" in target) target.moduleName = moduleName
       if ("settings" in target) target.settings = moduleSettings
     }
 
     Component {
       id: customCommandModuleComponent
-      CustomCommandModule { entry: host.entry }
+      CustomCommandModule {
+        entry: host.entry
+        bar: host.barWindow && host.barWindow.panelBar ? host.barWindow.panelBar : root
+      }
     }
   }
 
@@ -3277,7 +3360,7 @@ Item {
         readonly property string style: look ? look.widgetStyle : "plain"
         readonly property real across: Style.space(4)
         readonly property real along: Style.space(1)
-        readonly property color ink: root.barForeground
+        readonly property color ink: slot.window && slot.window.panelBar ? slot.window.panelBar.barForeground : root.barForeground
         visible: style !== "plain" && !root.transparent && !slot.dragSource && !slot.removalPending
           && slot.region !== "tray" && slot.widgetWidth > 0 && slot.widgetHeight > 0
         anchors.centerIn: parent
