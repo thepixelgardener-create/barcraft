@@ -298,8 +298,9 @@ test("classic presets follow Omarchy; art presets keep their own geometry", () =
 
 test("preset #8 statusline is a compact high-contrast developer preset", () => {
   const list = P.builtinSkins()
-  assert.strictEqual(list.length, 8)
-  const dev = list[7]
+  assert.strictEqual(list.length, 9)
+  const dev = list.find(s => s.id === "statusline")
+  assert.ok(dev)
   assert.strictEqual(dev.id, "statusline")
   assert.strictEqual(dev.name, "Statusline")
   assert.strictEqual(dev.category, "classic")
@@ -317,6 +318,19 @@ test("preset #8 statusline is a compact high-contrast developer preset", () => {
   assert.strictEqual(custom.widgetStyle, "chips")
   assert.strictEqual(custom.height, 26)
   assert.strictEqual(custom.contrast, 1.25)
+
+  const amiga = list.find(s => s.id === "amiga")
+  assert.ok(amiga)
+  assert.strictEqual(amiga.category, "wild")
+  assert.strictEqual(amiga.art, "amiga")
+  assert.strictEqual(amiga.customForeground, "#ffffff")
+  // A custom accent or background switches Wild Craft art to the theme
+  // palette; the preset keeps Workbench blue and orange in the art itself.
+  assert.strictEqual(amiga.customAccent, "")
+  assert.strictEqual(amiga.customBackground, "")
+  assert.strictEqual(amiga.themeTint, false)
+  const rt = roundtrip({ art: "amiga", name: "Amiga" })
+  assert.strictEqual(rt.art, "amiga")
 })
 
 test("width is a clamped percentage and opacity may reach zero", () => {
@@ -510,11 +524,12 @@ test("classifySkinWatchEvent handles edits, renames, temp files, and created/rem
   assert.strictEqual(P.classifySkinWatchEvent(userDir + "/|MOVE_SELF|", userDir, legacyDir, cfgDir), "rewatch")
 })
 
-test("SkinEngine handlers: single-pass scan, per-monitor zone sizing, and one-step paste undo", () => {
+test("SkinEngine handlers: single-pass scan, per-monitor editing/zones, diagnostics, and per-target undo", () => {
   const fs = require("fs")
   const vm = require("vm")
   const qml = fs.readFileSync(path.join(__dirname, "..", "SkinEngine.qml"), "utf8")
-  const processText = qml.slice(qml.indexOf("id: scanProc"))
+  const storeQml = fs.readFileSync(path.join(__dirname, "..", "SkinStore.qml"), "utf8")
+  const processText = storeQml.slice(storeQml.indexOf("id: scanProc"))
   const scanHandler = processText.match(/onStreamFinished: \{\n([\s\S]*?)\n      \}\n    \}\n/)[1]
   function method(name) {
     const re = new RegExp("^  (function " + name + "\\([^\\n]*\\) \\{[\\s\\S]*?^  \\})", "m")
@@ -525,10 +540,15 @@ test("SkinEngine handlers: single-pass scan, per-monitor zone sizing, and one-st
 
   const notices = []
   let persists = 0
+  let debounces = 0
+  const crypto = require("crypto")
+  const md5 = s => crypto.createHash("md5").update(String(s), "utf8").digest("hex")
   const ctx = vm.createContext({
     SkinParser: P,
+    Qt: { md5 },
     console,
     userSkins: [],
+    skinDiagnostics: [],
     builtinSkins: P.builtinSkins(),
     userSkinsDir: "/demo/skins",
     legacySkinsDir: "/demo/legacy-skins",
@@ -539,13 +559,16 @@ test("SkinEngine handlers: single-pass scan, per-monitor zone sizing, and one-st
     activeSkinId: "statusline",
     hasCustomDraft: false,
     customSkin: P.defaultSkin(),
-    pasteUndoSnapshot: null,
+    monitorSkins: { "DP-2": "child" },
+    monitorDrafts: {},
+    pasteUndoSnapshots: {},
+    _editTokens: {},
     previewSkin: null,
     previewScreen: "",
     vertical: false,
-    monitorSkins: { "DP-2": "child" },
     Style: { bar: { sizeHorizontal: 30, sizeVertical: 28 }, space: x => x, gapsOut: 6 },
     strings: { t: k => k === "label.standard" ? "Omarchy standard" : k },
+    persistDebounce: { restart: () => { debounces++ } },
     persistState: () => { persists++ },
     notice: (key, arg, isError) => { notices.push({ key, arg, isError }) },
     text: JSON.stringify([
@@ -553,6 +576,21 @@ test("SkinEngine handlers: single-pass scan, per-monitor zone sizing, and one-st
       { path: "/demo/skins/base.toml", text: "[bar-skin]\nname = \"Base\"\nheight = 48\nedge-margin = 8\n" }
     ])
   })
+  ctx.store = {
+    userSkinsDir: ctx.userSkinsDir,
+    legacySkinsDir: ctx.legacySkinsDir,
+    builtinSkins: ctx.builtinSkins,
+    skinHashes: {},
+    lastDiagnostics: [],
+    _mergeScanHashes: h => h,
+    skinsScanned: (skins, diags) => {
+      ctx.skinDiagnostics = diags || []
+      if (JSON.stringify(skins) !== JSON.stringify(ctx.userSkins)) {
+        ctx.userSkins = skins
+        ctx.revision++
+      }
+    }
+  }
   Object.defineProperty(ctx, "usingThemeSkin", {
     get() { return ctx.followTheme && ctx.themeSkin !== null && !ctx.hasCustomDraft }
   })
@@ -571,8 +609,12 @@ test("SkinEngine handlers: single-pass scan, per-monitor zone sizing, and one-st
   })
 
   const fns = [
-    "findSkinById", "monitorSkinFor", "skinForScreen", "barSizePxOf", "edgePxOf", "zoneFor",
-    "clearPreview", "clearPasteUndo", "currentName", "importText", "undoPaste", "selectSkin", "resetToPreset"
+    "normalizeTarget", "_tokenFor", "_bumpToken", "_setMonitorDraft", "_setPasteUndo", "canUndoPasteFor",
+    "findSkinById", "monitorSkinFor", "monitorDraftFor", "hasMonitorSkin", "hasDraftFor",
+    "committedSkinFor", "skinForScreen", "standardFor", "targetBaseId", "isSkinShared",
+    "barSizePxOf", "edgePxOf", "zoneFor", "chosenIdFor",
+    "clearPreview", "clearPasteUndo", "currentName", "updateField",
+    "exportToml", "importText", "undoPaste", "selectSkin", "selectForScreen", "resetTarget", "resetToPreset"
   ]
   vm.runInContext("var engine = this;\n" + fns.map(method).join("\n"), ctx)
 
@@ -594,35 +636,192 @@ test("SkinEngine handlers: single-pass scan, per-monitor zone sizing, and one-st
   assert.strictEqual(ctx.skinForScreen("DP-2").height, 34)
   assert.strictEqual(ctx.zoneFor("DP-2").sizePx, 48)
 
-  // 3) Paste saves previous draft and Undo paste restores it verbatim.
-  ctx.customSkin = P.normalizeSkin({ id: "floating", name: "Tuned Draft", height: 40, radius: 18 }, "floating", "custom")
-  ctx.hasCustomDraft = true
-  ctx.importText("[bar-skin]\nname = \"Shared\"\nheight = 24\nradius = 2\n")
-  assert.strictEqual(ctx.committedSkin.name, "Shared")
-  assert.strictEqual(ctx.committedSkin.height, 24)
-  assert.ok(ctx.pasteUndoSnapshot !== null)
+  // 3) Editing a secondary monitor creates a per-screen draft and leaves Main skin untouched.
+  ctx.updateField("height", 36, "DP-2")
+  assert.strictEqual(ctx.committedSkinFor("DP-2").height, 36)
+  assert.strictEqual(ctx.zoneFor("DP-2").sizePx, 36)
+  assert.strictEqual(ctx.committedSkinFor("").height, 26)
+  assert.strictEqual(ctx.hasDraftFor("DP-2"), true)
+  assert.strictEqual(ctx.hasDraftFor(""), false)
+  assert.ok(/height\s*=\s*36/.test(ctx.exportToml("DP-2")))
+  assert.ok(/height\s*=\s*26/.test(ctx.exportToml("")))
+  assert.ok(debounces > 0)
 
-  // Invalid paste leaves undo snapshot intact.
-  ctx.importText("not a skin")
-  assert.strictEqual(ctx.committedSkin.name, "Shared")
-  assert.ok(ctx.pasteUndoSnapshot !== null)
+  // 4) Per-screen paste + undo only affect that monitor.
+  assert.strictEqual(ctx.importText("[bar-skin]\nname = \"Portrait\"\nheight = 44\n", "DP-2"), true)
+  assert.strictEqual(ctx.committedSkinFor("DP-2").name, "Portrait")
+  assert.strictEqual(ctx.committedSkinFor("DP-2").height, 44)
+  assert.strictEqual(ctx.committedSkinFor("").name, "Statusline")
+  assert.strictEqual(ctx.canUndoPasteFor("DP-2"), true)
+  assert.strictEqual(ctx.canUndoPasteFor(""), false)
+  assert.strictEqual(ctx.undoPaste("DP-2"), true)
+  assert.strictEqual(ctx.committedSkinFor("DP-2").height, 36)
 
-  // Undo paste restores the tuned draft.
-  assert.strictEqual(ctx.undoPaste(), true)
-  assert.strictEqual(ctx.hasCustomDraft, true)
-  assert.strictEqual(ctx.committedSkin.name, "Tuned Draft")
-  assert.strictEqual(ctx.committedSkin.height, 40)
-  assert.strictEqual(ctx.committedSkin.radius, 18)
-  assert.strictEqual(ctx.pasteUndoSnapshot, null)
-  assert.strictEqual(notices[notices.length - 1].key, "status.pasteUndone")
-  assert.strictEqual(notices[notices.length - 1].arg, "Tuned Draft")
+  // 5) Typo-only paste preserves current draft and reports key + line.
+  const prevLen = notices.length
+  assert.strictEqual(ctx.importText("[bar-skin]\nheigth = 34\n", "DP-2"), false)
+  assert.strictEqual(ctx.committedSkinFor("DP-2").height, 36)
+  assert.strictEqual(notices[prevLen].key, "status.importError")
+  assert.ok(/Line 2/.test(notices[prevLen].arg) && /heigth/.test(notices[prevLen].arg) && /height/.test(notices[prevLen].arg))
 
-  // Selecting another skin clears undo snapshot.
-  ctx.importText("[bar-skin]\nname = \"Shared 2\"\nheight = 28\n")
-  assert.ok(ctx.pasteUndoSnapshot !== null)
-  ctx.selectSkin("islands")
-  assert.strictEqual(ctx.pasteUndoSnapshot, null)
+  // 6) Clamped value paste applies skin and reports the adjustment.
+  assert.strictEqual(ctx.importText("[bar-skin]\nname = \"Tall\"\nheight = 999\n", ""), true)
+  assert.strictEqual(ctx.committedSkin.height, 56)
+  assert.strictEqual(notices[notices.length - 1].key, "status.importedAdjusted")
+  assert.ok(/Line 3: height adjusted to 56/.test(notices[notices.length - 1].arg))
+
+  // 7) Undo on Main skin restores Statusline, leaving DP-2 draft intact.
+  assert.strictEqual(ctx.undoPaste(""), true)
+  assert.strictEqual(ctx.committedSkin.name, "Statusline")
+  assert.strictEqual(ctx.committedSkinFor("DP-2").height, 36)
+
+  // 8) Returning DP-2 to Main skin clears both override and draft.
+  ctx.selectForScreen("DP-2", "")
+  assert.strictEqual(ctx.hasMonitorSkin("DP-2"), false)
+  assert.strictEqual(ctx.committedSkinFor("DP-2").name, "Statusline")
   assert.ok(persists > 0)
+})
+
+test("inspectToml distinguishes hard errors from clamped adjustments and suggests fixes", () => {
+  const typoOnly = P.inspectToml("[bar-skin]\nheigth = 34\n", "imported", "custom")
+  assert.strictEqual(typoOnly.skin, null)
+  assert.strictEqual(typoOnly.appliedCount, 0)
+  assert.strictEqual(typoOnly.errors.length, 1)
+  assert.strictEqual(typoOnly.errors[0].line, 2)
+  assert.strictEqual(typoOnly.errors[0].suggestion, "height")
+  assert.ok(/Line 2: unknown key "heigth" \(did you mean "height"\?\)/.test(typoOnly.errors[0].message))
+
+  const badPreset = P.inspectToml("[bar-skin]\npreset = \"missing\"\n", "imported", "custom", () => null)
+  assert.strictEqual(badPreset.skin, null)
+  assert.strictEqual(badPreset.appliedCount, 0)
+  assert.ok(/Line 2: unknown preset "missing"/.test(badPreset.errors[0].message))
+
+  const clamped = P.inspectToml("[bar-skin]\nname = \"Big\"\nheight = 999\n", "imported", "custom")
+  assert.ok(clamped.skin !== null)
+  assert.strictEqual(clamped.skin.height, 56)
+  assert.strictEqual(clamped.errors.length, 0)
+  assert.strictEqual(clamped.adjustments.length, 1)
+  assert.strictEqual(clamped.adjustments[0].line, 3)
+  assert.strictEqual(clamped.adjustments[0].applied, 56)
+})
+
+test("inspectShellValues reports theme [bar-skin] typos and clamps", () => {
+  const res = P.inspectShellValues({ "bar-skin.heigth": "34", "bar-skin.height": "99" }, () => null)
+  assert.ok(res.skin !== null)
+  assert.strictEqual(res.skin.height, 56)
+  assert.strictEqual(res.errors.length, 1)
+  assert.ok(/heigth/.test(res.errors[0].message))
+  assert.strictEqual(res.adjustments.length, 1)
+  assert.strictEqual(res.adjustments[0].applied, 56)
+})
+
+test("reserved IDs (standard, draft, theme) never collide on save or disk load", () => {
+  assert.strictEqual(P.isReservedSkinId("standard"), true)
+  assert.strictEqual(P.isReservedSkinId("draft"), true)
+  assert.strictEqual(P.isReservedSkinId("theme"), true)
+  assert.strictEqual(P.isReservedSkinId("islands"), true)
+  assert.strictEqual(P.isReservedSkinId("my-custom"), false)
+
+  const target = P.resolveSaveTarget("Standard", [], "floating", slug => P.isReservedSkinId(slug), false)
+  assert.strictEqual(target.slug, "standard-custom")
+
+  const lib = P.parseSkinLibraryDetailed([
+    { path: "/demo/skins/standard.toml", text: "[bar-skin]\nname = \"Standard\"\nheight = 38\n" },
+    { path: "/demo/skins/draft.toml", text: "[bar-skin]\nname = \"Draft\"\nheight = 34\n" },
+    { path: "/demo/skins/broken.toml", text: "[bar-skin]\nheigth = 34\n" }
+  ], ["/demo/skins"], P.builtinSkins())
+  assert.strictEqual(lib.skins.length, 2)
+  assert.strictEqual(lib.skins[0].id, "standard-saved")
+  assert.strictEqual(lib.skins[0].path, "/demo/skins/standard.toml")
+  assert.strictEqual(lib.skins[1].id, "draft-saved")
+  assert.strictEqual(lib.diagnostics.length, 1)
+  assert.strictEqual(lib.diagnostics[0].path, "/demo/skins/broken.toml")
+  assert.strictEqual(JSON.stringify(lib.renamedIds), JSON.stringify({ standard: "standard-saved", draft: "draft-saved" }))
+})
+
+test("skin library: renamed reserved slugs never duplicate, and presets naming the old id still resolve", () => {
+  const lib = P.parseSkinLibraryDetailed([
+    { path: "/demo/skins/standard.toml", text: "[bar-skin]\nname = \"Standard\"\nheight = 38\n" },
+    { path: "/demo/skins/child.toml", text: "[bar-skin]\nname = \"Child\"\npreset = \"standard\"\n" },
+    { path: "/demo/legacy/standard-saved.toml", text: "[bar-skin]\nname = \"Other\"\nheight = 44\n" }
+  ], ["/demo/skins", "/demo/legacy"], P.builtinSkins())
+  const ids = lib.skins.map(s => s.id)
+  assert.strictEqual(JSON.stringify(ids), JSON.stringify(["standard-saved", "child"]))
+  assert.strictEqual(lib.skins[0].path, "/demo/skins/standard.toml")
+  assert.strictEqual(lib.skins[1].height, 38)
+  assert.strictEqual(lib.diagnostics.length, 0)
+})
+
+test("skin library: a broken or empty file never hides a working one in the other folder", () => {
+  const lib = P.parseSkinLibraryDetailed([
+    { path: "/demo/skins/foo.toml", text: "# not a skin yet\n" },
+    { path: "/demo/skins/new.toml", text: "  \n" },
+    { path: "/demo/legacy/foo.toml", text: "[bar-skin]\nname = \"Foo\"\nheight = 40\n" }
+  ], ["/demo/skins", "/demo/legacy"], P.builtinSkins())
+  assert.strictEqual(lib.skins.length, 1)
+  assert.strictEqual(lib.skins[0].id, "foo")
+  assert.strictEqual(lib.skins[0].path, "/demo/legacy/foo.toml")
+  const byPath = {}
+  lib.diagnostics.forEach(d => { byPath[d.path] = d.errors[0].message })
+  assert.strictEqual(byPath["/demo/skins/foo.toml"], "No [bar-skin] section found")
+  assert.strictEqual(byPath["/demo/skins/new.toml"], "File is empty")
+})
+
+test("serializeToml: Copy TOML omits inactive sub-keys, skin files keep them", () => {
+  const plain = P.serializeToml(P.defaultSkin(), { compact: true })
+  assert.ok(/shell\.bar-skin\.toml/.test(plain))
+  assert.ok(!/shadow-strength/.test(plain))
+  assert.ok(!/bezel-strength/.test(plain))
+  assert.ok(!/theme-tint/.test(plain))
+  assert.ok(!/hover-edge-px/.test(plain))
+
+  const rich = P.serializeToml(P.normalizeSkin({
+    art: "matrix", themeTint: true, bezel: "raised", shadow: true, visibility: "autohide"
+  }, "rich", "user"))
+  assert.ok(/theme-tint\s*=\s*true/.test(rich))
+  assert.ok(/bezel-strength\s*=/.test(rich))
+  assert.ok(/shadow-strength\s*=/.test(rich))
+  assert.ok(/hover-edge-px\s*=/.test(rich))
+
+  // Saved to disk, values for a switched-off feature survive a round trip.
+  const off = P.normalizeSkin({ visibility: "always", hoverEdgePx: 10, accentHairline: false, shadow: false, shadowStrength: 0.4 }, "off", "user")
+  const full = P.serializeToml(off)
+  assert.ok(/hover-edge-px\s*=\s*10/.test(full))
+  assert.ok(/accent-hairline\s*=\s*false/.test(full))
+  const back = P.parseToml(full, "off", "user")
+  assert.strictEqual(back.hoverEdgePx, 10)
+  assert.strictEqual(back.accentHairline, false)
+  assert.strictEqual(back.shadowStrength, 0.4)
+  assert.ok(!/hover-edge-px/.test(P.serializeToml(off, { compact: true })))
+})
+
+test("shell.json state round-trips per-screen monitorDrafts cleanly", () => {
+  const mDraft = P.normalizeSkin({ id: "islands", name: "DP-2 Custom", height: 42, radius: 18 }, "islands", "custom")
+  const json = P.stateToJson("floating", true, null, null, { "DP-2": "islands" }, false, { "DP-2": mDraft, "../bad": mDraft })
+  const st = P.stateFromJson(JSON.parse(JSON.stringify(json)))
+  assert.deepStrictEqual(Object.keys(st.monitorDrafts), ["DP-2"])
+  assert.strictEqual(st.monitorDrafts["DP-2"].height, 42)
+  assert.strictEqual(st.monitorDrafts["DP-2"].name, "DP-2 Custom")
+})
+
+test("semver comparison and remote manifest version validation", () => {
+  assert.deepStrictEqual(P.parseSemver("0.7.0"), [0, 7, 0])
+  assert.deepStrictEqual(P.parseSemver("v1.2.10"), [1, 2, 10])
+  assert.strictEqual(P.parseSemver("0.7.0-beta"), null)
+  assert.strictEqual(P.parseSemver("<img src=x>"), null)
+  assert.strictEqual(P.compareSemver("0.7.1", "0.7.0"), 1)
+  assert.strictEqual(P.compareSemver("0.7.0", "0.7.0"), 0)
+  assert.strictEqual(P.compareSemver("0.6.0", "0.7.0"), -1)
+  assert.strictEqual(P.compareSemver("0.10.0", "0.7.9"), 1)
+
+  const valid = JSON.stringify({ id: "thepixelgardener.barcraft", version: "0.7.1" })
+  assert.strictEqual(P.parseRemoteManifestVersion(valid, "thepixelgardener.barcraft"), "0.7.1")
+  const wrongId = JSON.stringify({ id: "someone.else", version: "9.9.9" })
+  assert.strictEqual(P.parseRemoteManifestVersion(wrongId, "thepixelgardener.barcraft"), "")
+  const badVer = JSON.stringify({ id: "thepixelgardener.barcraft", version: "<b>1.0.0</b>" })
+  assert.strictEqual(P.parseRemoteManifestVersion(badVer, "thepixelgardener.barcraft"), "")
+  assert.strictEqual(P.parseRemoteManifestVersion("not json", "thepixelgardener.barcraft"), "")
+  assert.strictEqual(P.parseRemoteManifestVersion("x".repeat(20000), "thepixelgardener.barcraft"), "")
 })
 
 console.log("SkinParser: " + passed + " tests passed")

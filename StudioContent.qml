@@ -41,7 +41,25 @@ Column {
   property string renamingId: ""
   property string confirmDeleteId: ""
   property string confirmOverwriteName: ""
+  property string lastSaveName: ""
   property string pendingPreview: ""
+
+  SkinLook {
+    id: targetLook
+    skin: {
+      if (!root.engine) return null
+      root.engine.revision
+      return root.engine.skinForScreen(root.screenTarget)
+    }
+    paletteMap: root.engine ? root.engine.themeColors : ({})
+    barGlassy: root.engine ? root.engine.barGlassy : false
+    standard: root.engine ? root.engine.standardFor(root.screenTarget) : false
+    vertical: root.engine ? root.engine.vertical : false
+  }
+
+  function sharedLabel(text) {
+    return root.screenTarget !== "" ? root.tr("label.sharedSuffix", "%1 (shared)").arg(text) : text
+  }
 
   property bool keyboardMode: false
   property var navItems: []
@@ -103,7 +121,22 @@ Column {
   Connections {
     target: root.engine
     function onNotice(key, arg, isError) {
+      if (key === "status.saveChangedExternally" && root.lastSaveName !== "") {
+        root.confirmOverwriteName = root.lastSaveName
+        overwriteTimer.restart()
+      }
       root.showStatus(root.tr(key).arg(arg), isError)
+    }
+    function onSkinRenamed(oldId, newId) {
+      if (!newId) return
+      root.restoreKey = "card:" + newId
+      for (var i = 0; i < root.navItems.length; i++) {
+        if (root.navItems[i].navKey === root.restoreKey) {
+          root.navCurrent = root.navItems[i]
+          root.restoreKey = ""
+          break
+        }
+      }
     }
   }
 
@@ -162,11 +195,11 @@ Column {
 
   // ---- Choosing and managing skins -------------------------------------------
 
-  function pickSkin(id) {
+  function pickSkin(id, isUser) {
     if (!engine) return
     pendingPreview = ""
     previewTimer.stop()
-    if (id === "standard") {
+    if (!isUser && id === "standard") {
       engine.setStandard(!engine.standard)
       return
     }
@@ -207,16 +240,7 @@ Column {
   function finishRename(id, text, commit) {
     if (renamingId !== id) return
     renamingId = ""
-    if (commit && engine) {
-      var slug = engine.renameUserSkin(id, text)
-      if (slug) restoreKey = "card:" + slug
-      for (var i = 0; i < navItems.length; i++) {
-        if (navItems[i].navKey === restoreKey) {
-          navCurrent = navItems[i]
-          restoreKey = ""
-        }
-      }
-    }
+    if (commit && engine) engine.renameUserSkin(id, text)
     restoreKeys()
   }
 
@@ -229,9 +253,11 @@ Column {
 
   function saveSkin() {
     if (!engine) return
-    var wanted = nameField.text || engine.committedSkin.name
+    var current = engine.committedSkinFor(screenTarget)
+    var wanted = nameField.text || (current ? current.name : "")
     var confirmed = confirmOverwriteName !== "" && confirmOverwriteName === wanted
-    var res = engine.saveUserSkin(wanted, confirmed)
+    lastSaveName = wanted
+    var res = engine.saveUserSkin(wanted, confirmed, screenTarget)
     if (res && res.needsConfirm) {
       confirmOverwriteName = wanted
       overwriteTimer.restart()
@@ -285,7 +311,7 @@ Column {
       // overlap the pinned tabs and footer in window coordinates.
       var scroll = body.flickable
       var offset = item.inFooter ? Math.max(0, scroll.contentHeight - scroll.height)
-        : item === tabRow ? 0 : scroll.contentY
+        : item.inHeader ? 0 : scroll.contentY
       out.push({ item: item, x: p.x, y: p.y + offset })
     }
     out.sort(function(a, b) { return Math.abs(a.y - b.y) > 6 ? a.y - b.y : a.x - b.x })
@@ -295,7 +321,7 @@ Column {
   function setCurrent(item) {
     navCurrent = item
     if (!item) return
-    if (item !== tabRow && !item.inFooter) body.ensureVisible(item)
+    if (!item.inHeader && !item.inFooter) body.ensureVisible(item)
     pendingPreview = item.navPreviewId
     previewTimer.restart()
   }
@@ -372,15 +398,19 @@ Column {
       root.engine.revision
       if (root.engine.previewing) return root.tr("meta.preview").arg(root.engine.previewSkin.name)
       if (root.engine.standard) return root.tr("meta.standard", "Omarchy standard")
-      var name = root.engine.committedSkin.name
-      if (root.engine.usingThemeSkin) return root.tr("meta.theme").arg(name)
-      if (root.engine.hasCustomDraft) return root.tr("meta.custom").arg(name)
-      return root.tr("meta.preset").arg(name)
+      var target = root.screenTarget
+      var skin = root.engine.committedSkinFor(target)
+      var name = skin ? skin.name : ""
+      var label = ""
+      if (target === "" && root.engine.usingThemeSkin) label = root.tr("meta.theme").arg(name)
+      else if (root.engine.hasDraftFor(target)) label = root.tr("meta.custom").arg(name)
+      else label = root.tr("meta.preset").arg(name)
+      return target !== "" ? root.tr("meta.screen", "%1 · %2").arg(target).arg(label) : label
     }
     iconComponent: Component {
       BarcraftMark {
-        width: Math.round(Style.font.display * 1.5)
-        height: Math.round(width * 0.56)
+        width: Math.round(Style.font.display * 1.3)
+        height: Math.round(width * 0.6)
         ink: root.fg
       }
     }
@@ -389,6 +419,7 @@ Column {
   NavItem {
     id: tabRow
     navKey: "tabs"
+    inHeader: true
     width: parent.width
     implicitHeight: tabBar.implicitHeight
     height: implicitHeight
@@ -415,11 +446,57 @@ Column {
     }
   }
 
+  // Target selector pinned across all five tabs when multiple monitors exist.
+  Column {
+    id: targetBar
+    width: parent.width
+    spacing: Style.spacing.xs
+    visible: root.screenNames.length > 1 && !!root.engine
+
+    ChoiceRow {
+      navKey: "screens"
+      inHeader: true
+      label: root.tr("label.editing", "Editing")
+      value: root.screenTarget === "" ? "*main*" : root.screenTarget
+      options: {
+        var out = [{ value: "*main*", label: root.tr("screens.main", "Main skin") }]
+        for (var i = 0; i < root.screenNames.length; i++) out.push({ value: root.screenNames[i], label: root.screenNames[i] })
+        return out
+      }
+      onPicked: function(v) {
+        root.screenTarget = v === "*main*" ? "" : v
+        root.confirmOverwriteName = ""
+        root.pendingPreview = ""
+        previewTimer.restart()
+      }
+    }
+
+    RowLayout {
+      width: parent.width
+      visible: root.screenTarget !== ""
+      spacing: Style.spacing.md
+
+      HintText {
+        Layout.fillWidth: true
+        text: root.tr("hint.screenSkin", "").arg(root.screenTarget)
+      }
+
+      ActionButton {
+        navKey: "useMain"
+        inHeader: true
+        visible: !!root.engine && (root.engine.revision, root.engine.hasMonitorSkin(root.screenTarget))
+        text: root.tr("action.useMain", "Use main skin")
+        onTriggered: if (root.engine) root.engine.selectForScreen(root.screenTarget, "")
+      }
+    }
+  }
+
   // ---- Body (scrolls) -------------------------------------------------------
 
   O.ScrollArea {
     id: body
     readonly property real chrome: hero.height + tabRow.height
+      + (targetBar.visible ? targetBar.implicitHeight + root.spacing : 0)
       + (footer.visible ? footer.implicitHeight + root.spacing : 0)
       + (statusText.visible ? statusText.implicitHeight + root.spacing : 0)
       + (keysHint.visible ? keysHint.implicitHeight + root.spacing : 0)
@@ -435,42 +512,6 @@ Column {
       width: parent.width
       spacing: Style.spacing.md
       visible: root.activeTab === "presets" && !!root.engine
-
-      // Per-screen skins, when there is more than one screen.
-      ChoiceRow {
-        navKey: "screens"
-        visible: root.screenNames.length > 1
-        label: root.tr("label.applyTo", "Apply to")
-        value: root.screenTarget === "" ? "*all*" : root.screenTarget
-        options: {
-          var out = [{ value: "*all*", label: root.tr("screens.all", "All screens") }]
-          for (var i = 0; i < root.screenNames.length; i++) out.push({ value: root.screenNames[i], label: root.screenNames[i] })
-          return out
-        }
-        onPicked: function(v) {
-          root.screenTarget = v === "*all*" ? "" : v
-          root.pendingPreview = ""
-          previewTimer.restart()
-        }
-      }
-
-      RowLayout {
-        width: parent.width
-        visible: root.screenTarget !== ""
-        spacing: Style.spacing.md
-
-        HintText {
-          Layout.fillWidth: true
-          text: root.tr("hint.screenSkin", "")
-        }
-
-        ActionButton {
-          navKey: "useMain"
-          visible: !!root.engine && (root.engine.revision, root.engine.hasMonitorSkin(root.screenTarget))
-          text: root.tr("action.useMain", "Use main skin")
-          onTriggered: if (root.engine) root.engine.selectForScreen(root.screenTarget, "")
-        }
-      }
 
       // Every skin in one grid: Omarchy's own bar first (the way back, a
       // click again leaves it), the theme's skin, the presets.
@@ -525,17 +566,17 @@ Column {
 
         ActionButton {
           navKey: "undoPasteSkins"
-          visible: !!root.engine && root.engine.canUndoPaste
+          visible: !!root.engine && (root.engine.revision, root.engine.canUndoPasteFor(root.screenTarget))
           text: root.tr("action.undoPaste", "Undo paste")
           iconText: "󰕌"
-          onTriggered: if (root.engine) root.engine.undoPaste()
+          onTriggered: if (root.engine) root.engine.undoPaste(root.screenTarget)
         }
 
         ActionButton {
           navKey: "pasteSkins"
           text: root.tr("action.paste", "Paste skin")
           iconText: "󰆒"
-          onTriggered: if (root.engine) root.engine.importFromClipboard()
+          onTriggered: if (root.engine) root.engine.importFromClipboard(root.screenTarget)
         }
       }
 
@@ -585,13 +626,13 @@ Column {
       ChoiceRow {
         navKey: "fill"
         label: root.tr("label.fill", "Fill")
-        value: root.engine ? root.engine.fill : "solid"
+        value: targetLook.fill
         options: [
           { value: "solid", label: root.tr("fill.solid", "Solid") },
           { value: "gradient", label: root.tr("fill.gradient", "Gradient") }
         ]
         onPicked: function(v) {
-          root.engine.updateField("fill", v)
+          root.engine.updateField("fill", v, root.screenTarget)
           if (v === "gradient") root.colorTarget = "gradient"
           else if (root.colorTarget === "gradient") root.colorTarget = "surface"
         }
@@ -607,7 +648,7 @@ Column {
             { value: "foreground", label: root.tr("colorTarget.foreground", "Icons") },
             { value: "accent", label: root.tr("colorTarget.accent", "Accent") }
           ]
-          if (root.engine && root.engine.fill === "gradient") out.push({ value: "gradient", label: root.tr("colorTarget.gradient", "Blend") })
+          if (targetLook.fill === "gradient") out.push({ value: "gradient", label: root.tr("colorTarget.gradient", "Blend") })
           return out
         }
         onPicked: function(v) { root.colorTarget = v }
@@ -625,9 +666,9 @@ Column {
         readonly property string field: root.colorTarget === "foreground" ? "customForeground"
           : (root.colorTarget === "accent" ? "customAccent"
             : (root.colorTarget === "gradient" ? "gradientTo" : "customBackground"))
-        readonly property string value: !root.engine ? "" : (root.colorTarget === "foreground" ? root.engine.customForeground
-          : (root.colorTarget === "accent" ? root.engine.customAccent
-            : (root.colorTarget === "gradient" ? root.engine.gradientTo : root.engine.customBackground)))
+        readonly property string value: root.colorTarget === "foreground" ? targetLook.customForeground
+          : (root.colorTarget === "accent" ? targetLook.customAccent
+            : (root.colorTarget === "gradient" ? targetLook.gradientTo : targetLook.customBackground))
 
         Rectangle {
           anchors.fill: parent
@@ -650,16 +691,16 @@ Column {
           resolvedColor: {
             if (!root.engine || colorNav.value === "") return fallbackColor
             root.engine.themeColors
-            var hex = root.engine.resolveColorRef(colorNav.value)
+            var hex = targetLook.resolveRef(colorNav.value)
             return hex !== "" ? Qt.color(hex) : fallbackColor
           }
           fallbackColor: {
             if (!root.engine) return Kit.Color.background
-            if (root.colorTarget === "foreground") return root.engine.effectiveForeground
-            if (root.colorTarget === "accent" || root.colorTarget === "gradient") return root.engine.resolvedAccent
-            return root.engine.surfaceColor
+            if (root.colorTarget === "foreground") return targetLook.effectiveForeground
+            if (root.colorTarget === "accent" || root.colorTarget === "gradient") return targetLook.resolvedAccent
+            return targetLook.surfaceColor
           }
-          onColorPicked: function(value) { root.engine.updateField(colorNav.field, value) }
+          onColorPicked: function(value) { root.engine.updateField(colorNav.field, value, root.screenTarget) }
         }
       }
 
@@ -669,25 +710,25 @@ Column {
         SliderRow {
           navKey: "surfaceTone"
           label: root.tr("label.surfaceTone", "Surface depth")
-          valueText: root.percent(root.engine ? root.engine.surfaceTone : 1)
+          valueText: root.percent(targetLook.surfaceTone)
           minimum: 0.5
           maximum: 1.5
           step: 0.05
           integer: false
-          value: root.engine ? root.engine.surfaceTone : 1
-          onChangedValue: function(v) { root.engine.updateField("surfaceTone", v) }
+          value: targetLook.surfaceTone
+          onChangedValue: function(v) { root.engine.updateField("surfaceTone", v, root.screenTarget) }
         }
 
         SliderRow {
           navKey: "contrast"
           label: root.tr("label.contrast", "Text contrast")
-          valueText: root.percent(root.engine ? root.engine.contrast : 1)
+          valueText: root.percent(targetLook.contrast)
           minimum: 0.5
           maximum: 1.5
           step: 0.05
           integer: false
-          value: root.engine ? root.engine.contrast : 1
-          onChangedValue: function(v) { root.engine.updateField("contrast", v) }
+          value: targetLook.contrast
+          onChangedValue: function(v) { root.engine.updateField("contrast", v, root.screenTarget) }
         }
       }
     }
@@ -705,100 +746,100 @@ Column {
       ChoiceRow {
         navKey: "mode"
         label: root.tr("section.mode", "Architecture")
-        value: root.engine ? root.engine.mode : "floating"
+        value: targetLook.mode
         options: [
           { value: "edge", label: root.tr("mode.edge", "Edge") },
           { value: "floating", label: root.tr("mode.floating", "Floating") },
           { value: "islands", label: root.tr("mode.islands", "Islands") }
         ]
-        onPicked: function(v) { root.engine.updateField("mode", v) }
+        onPicked: function(v) { root.engine.updateField("mode", v, root.screenTarget) }
       }
 
       SliderRow {
         navKey: "height"
         label: root.tr("label.height", "Height")
         autoAvailable: true
-        isAuto: !!root.engine && root.engine.look.heightAuto
-        valueText: isAuto ? root.num(root.engine.look.barSizePx) + " px"
-          : root.num(root.engine ? root.engine.skinHeight : 30) + " px"
+        isAuto: targetLook.heightAuto
+        valueText: isAuto ? root.num(targetLook.barSizePx) + " px"
+          : root.num(targetLook.skinHeight) + " px"
         minimum: 22
-        maximum: 48
+        maximum: 56
         step: 1
-        value: root.engine ? root.engine.skinHeight : 30
-        onChangedValue: function(v) { root.engine.updateField("height", Math.round(v)) }
-        onAutoToggled: root.engine.updateField("height", isAuto ? root.engine.skinHeight : "auto")
+        value: targetLook.skinHeight
+        onChangedValue: function(v) { root.engine.updateField("height", Math.round(v), root.screenTarget) }
+        onAutoToggled: root.engine.updateField("height", isAuto ? targetLook.skinHeight : "auto", root.screenTarget)
       }
 
       SliderRow {
         navKey: "edgeMargin"
-        visible: !!root.engine && root.engine.mode !== "edge"
+        visible: targetLook.mode !== "edge"
         label: root.tr("label.edgeMargin", "Edge gap")
         autoAvailable: true
-        isAuto: !!root.engine && root.engine.look.edgeAuto
-        valueText: isAuto ? root.num(root.engine.look.edgePx) + " px"
-          : root.num(root.engine ? root.engine.edgeMargin : 6) + " px"
+        isAuto: targetLook.edgeAuto
+        valueText: isAuto ? root.num(targetLook.edgePx) + " px"
+          : root.num(targetLook.edgeMargin) + " px"
         minimum: 0
-        maximum: 20
+        maximum: 24
         step: 1
-        value: root.engine ? root.engine.edgeMargin : 6
-        onChangedValue: function(v) { root.engine.updateField("edgeMargin", Math.round(v)) }
-        onAutoToggled: root.engine.updateField("edgeMargin", isAuto ? root.engine.edgeMargin : "auto")
+        value: targetLook.edgeMargin
+        onChangedValue: function(v) { root.engine.updateField("edgeMargin", Math.round(v), root.screenTarget) }
+        onAutoToggled: root.engine.updateField("edgeMargin", isAuto ? targetLook.edgeMargin : "auto", root.screenTarget)
       }
 
       SliderRow {
         navKey: "sideMargin"
-        visible: !!root.engine && root.engine.mode !== "edge"
+        visible: targetLook.mode !== "edge"
         label: root.tr("label.sideMargin", "Side margin")
         autoAvailable: true
-        isAuto: !!root.engine && root.engine.look.sideAuto
-        valueText: isAuto ? root.num(root.engine.look.sidePx) + " px"
-          : root.num(root.engine ? root.engine.sideMargin : 10) + " px"
+        isAuto: targetLook.sideAuto
+        valueText: isAuto ? root.num(targetLook.sidePx) + " px"
+          : root.num(targetLook.sideMargin) + " px"
         minimum: 0
-        maximum: 36
+        maximum: 48
         step: 1
-        value: root.engine ? root.engine.sideMargin : 10
-        onChangedValue: function(v) { root.engine.updateField("sideMargin", Math.round(v)) }
-        onAutoToggled: root.engine.updateField("sideMargin", isAuto ? root.engine.sideMargin : "auto")
+        value: targetLook.sideMargin
+        onChangedValue: function(v) { root.engine.updateField("sideMargin", Math.round(v), root.screenTarget) }
+        onAutoToggled: root.engine.updateField("sideMargin", isAuto ? targetLook.sideMargin : "auto", root.screenTarget)
       }
 
       SliderRow {
         navKey: "width"
-        visible: !!root.engine && root.engine.mode !== "edge"
+        visible: targetLook.mode !== "edge"
         label: root.tr("label.width", "Width")
-        valueText: root.num(root.engine ? root.engine.look.widthPercent : 100) + "%"
+        valueText: root.num(targetLook.widthPercent) + "%"
         minimum: 30
         maximum: 100
         step: 5
-        value: root.engine ? root.engine.look.widthPercent : 100
-        onChangedValue: function(v) { root.engine.updateField("width", Math.round(v)) }
+        value: targetLook.widthPercent
+        onChangedValue: function(v) { root.engine.updateField("width", Math.round(v), root.screenTarget) }
       }
 
       SliderRow {
         navKey: "radius"
-        visible: !!root.engine && root.engine.mode !== "edge"
+        visible: targetLook.mode !== "edge"
         label: root.tr("label.radius", "Corners")
         autoAvailable: true
-        isAuto: !!root.engine && root.engine.look.radiusAuto
-        valueText: isAuto ? root.num(root.engine.look.radiusPx) + " px"
-          : root.num(root.engine ? root.engine.radius : 10) + " px"
+        isAuto: targetLook.radiusAuto
+        valueText: isAuto ? root.num(targetLook.radiusPx) + " px"
+          : root.num(targetLook.radius) + " px"
         minimum: 0
-        maximum: 24
+        maximum: 28
         step: 1
-        value: root.engine ? root.engine.radius : 10
-        onChangedValue: function(v) { root.engine.updateField("radius", Math.round(v)) }
-        onAutoToggled: root.engine.updateField("radius", isAuto ? root.engine.radius : "auto")
+        value: targetLook.radius
+        onChangedValue: function(v) { root.engine.updateField("radius", Math.round(v), root.screenTarget) }
+        onAutoToggled: root.engine.updateField("radius", isAuto ? targetLook.radius : "auto", root.screenTarget)
       }
 
       SliderRow {
         navKey: "iconScale"
-        label: root.tr("label.iconScale", "Icon size")
-        valueText: root.percent(root.engine ? root.engine.iconScale : 1)
+        label: root.sharedLabel(root.tr("label.iconScale", "Icon size"))
+        valueText: root.percent(root.engine ? root.engine.look.iconScale : 1)
         minimum: 0.8
         maximum: 1.5
         step: 0.05
         integer: false
-        value: root.engine ? root.engine.iconScale : 1
-        onChangedValue: function(v) { root.engine.updateField("iconScale", v) }
+        value: root.engine ? root.engine.look.iconScale : 1
+        onChangedValue: function(v) { root.engine.setSharedIconScale(v) }
       }
     }
 
@@ -816,21 +857,21 @@ Column {
         navKey: "opacity"
         label: root.tr("label.opacity", "Opacity")
         autoAvailable: true
-        isAuto: !!root.engine && root.engine.look.alphaAuto
-        valueText: root.percent(root.engine ? root.engine.backgroundAlpha : 0.92)
+        isAuto: targetLook.alphaAuto
+        valueText: root.percent(targetLook.backgroundAlpha)
         minimum: 0
         maximum: 1.0
         step: 0.02
         integer: false
-        value: root.engine ? root.engine.backgroundAlpha : 0.92
-        onChangedValue: function(v) { root.engine.updateField("backgroundAlpha", v) }
-        onAutoToggled: root.engine.updateField("backgroundAlpha", isAuto ? root.engine.backgroundAlpha : "auto")
+        value: targetLook.backgroundAlpha
+        onChangedValue: function(v) { root.engine.updateField("backgroundAlpha", v, root.screenTarget) }
+        onAutoToggled: root.engine.updateField("backgroundAlpha", isAuto ? targetLook.backgroundAlpha : "auto", root.screenTarget)
       }
 
       ChoiceRow {
         navKey: "border"
         label: root.tr("label.borderRole", "Border")
-        value: root.engine ? root.engine.borderRole : "subtle"
+        value: targetLook.borderRole
         options: [
           { value: "none", label: root.tr("border.none", "None") },
           { value: "subtle", label: root.tr("border.subtle", "Subtle") },
@@ -838,47 +879,47 @@ Column {
           { value: "hyprland", label: root.tr("border.hyprland", "Hyprland") }
         ]
         onPicked: function(v) {
-          root.engine.updateField("border", v)
-          if (v !== "none" && root.engine.borderWidth === 0) root.engine.updateField("borderWidth", 1)
+          root.engine.updateField("border", v, root.screenTarget)
+          if (v !== "none" && targetLook.borderWidth === 0) root.engine.updateField("borderWidth", 1, root.screenTarget)
         }
       }
 
       ChoiceRow {
         navKey: "widgetStyle"
         label: root.tr("label.widgetStyle", "Widgets")
-        value: root.engine ? root.engine.widgetStyle : "plain"
+        value: targetLook.widgetStyle
         options: [
           { value: "plain", label: root.tr("widgetStyle.plain", "Plain") },
           { value: "pills", label: root.tr("widgetStyle.pills", "Pills") },
           { value: "chips", label: root.tr("widgetStyle.chips", "Chips") }
         ]
-        onPicked: function(v) { root.engine.updateField("widgetStyle", v) }
+        onPicked: function(v) { root.engine.updateField("widgetStyle", v, root.screenTarget) }
       }
 
       ToggleRow {
         navKey: "shadow"
         label: root.tr("label.shadow", "Shadow")
         hint: root.tr("label.shadowHint", "")
-        checked: root.engine ? root.engine.shadow : false
-        onToggled: root.engine.updateField("shadow", !root.engine.shadow)
+        checked: targetLook.shadow
+        onToggled: root.engine.updateField("shadow", !targetLook.shadow, root.screenTarget)
       }
 
       SliderRow {
         navKey: "shadowStrength"
-        visible: !!root.engine && root.engine.shadow
+        visible: targetLook.shadow
         label: root.tr("label.shadowStrength", "Shadow depth")
-        valueText: root.percent(root.engine ? root.engine.shadowStrength : 0.5)
+        valueText: root.percent(targetLook.shadowStrength)
         minimum: 0.1
         maximum: 1.0
         step: 0.05
         integer: false
-        value: root.engine ? root.engine.shadowStrength : 0.5
-        onChangedValue: function(v) { root.engine.updateField("shadowStrength", v) }
+        value: targetLook.shadowStrength
+        onChangedValue: function(v) { root.engine.updateField("shadowStrength", v, root.screenTarget) }
       }
 
       ToggleRow {
         navKey: "blur"
-        label: root.tr("label.blur", "Glass blur")
+        label: root.sharedLabel(root.tr("label.blur", "Glass blur"))
         hint: root.tr("label.blurHint", "")
         checked: root.engine ? root.engine.blurActive : false
         onToggled: root.engine.setBlur(!root.engine.blurActive)
@@ -887,7 +928,7 @@ Column {
       ChoiceRow {
         navKey: "bezel"
         label: root.tr("section.bezel", "Bezel")
-        value: root.engine ? root.engine.bezel : "none"
+        value: targetLook.bezel
         options: [
           { value: "none", label: root.tr("bezel.none", "Flat") },
           { value: "raised", label: root.tr("bezel.raised", "Raised") },
@@ -895,41 +936,42 @@ Column {
           { value: "ridge", label: root.tr("bezel.ridge", "Ridge") },
           { value: "glass", label: root.tr("bezel.glass", "Glass") }
         ]
-        onPicked: function(v) { root.engine.updateField("bezel", v) }
+        onPicked: function(v) { root.engine.updateField("bezel", v, root.screenTarget) }
       }
 
       SliderRow {
         navKey: "bezelStrength"
-        visible: !!root.engine && root.engine.bezel !== "none"
+        visible: targetLook.bezel !== "none"
         label: root.tr("label.bezelStrength", "Bezel depth")
-        valueText: root.percent(root.engine ? root.engine.bezelStrength : 0.75)
-        minimum: 0.2
+        valueText: root.percent(targetLook.bezelStrength)
+        minimum: 0.15
         maximum: 1.0
         step: 0.05
         integer: false
-        value: root.engine ? root.engine.bezelStrength : 0.75
-        onChangedValue: function(v) { root.engine.updateField("bezelStrength", v) }
+        value: targetLook.bezelStrength
+        onChangedValue: function(v) { root.engine.updateField("bezelStrength", v, root.screenTarget) }
       }
 
       ChoiceRow {
         navKey: "art"
         label: root.tr("section.art", "Craft Art")
-        value: root.engine ? root.engine.art : "none"
+        value: targetLook.art
         options: [
           { value: "none", label: root.tr("art.none", "Clean") },
           { value: "matrix", label: root.tr("art.matrix", "Matrix") },
-          { value: "runeforge", label: root.tr("art.runeforge", "Runeforge") }
+          { value: "runeforge", label: root.tr("art.runeforge", "Runeforge") },
+          { value: "amiga", label: root.tr("art.amiga", "Amiga") }
         ]
-        onPicked: function(v) { root.engine.updateField("art", v) }
+        onPicked: function(v) { root.engine.updateField("art", v, root.screenTarget) }
       }
 
       ToggleRow {
         navKey: "themeTint"
-        visible: !!root.engine && root.engine.hasArt
+        visible: targetLook.hasArt
         label: root.tr("label.themeTint", "Tint art with theme")
         hint: root.tr("label.themeTintHint", "")
-        checked: root.engine ? root.engine.themeTint : false
-        onToggled: root.engine.updateField("themeTint", !root.engine.themeTint)
+        checked: targetLook.themeTint
+        onToggled: root.engine.updateField("themeTint", !targetLook.themeTint, root.screenTarget)
       }
     }
 
@@ -947,14 +989,14 @@ Column {
         navKey: "autoHide"
         label: root.tr("label.autoHide", "Auto-hide")
         hint: root.tr("label.autoHideHint", "")
-        checked: root.engine ? root.engine.autoHide : false
-        onToggled: root.engine.toggleAutoHide()
+        checked: targetLook.autoHide
+        onToggled: root.engine.toggleAutoHide(root.screenTarget)
       }
 
       ChoiceRow {
         navKey: "autohideWhen"
-        visible: !!root.engine && root.engine.autoHide
-        label: root.tr("label.autohideWhen", "Hide")
+        visible: targetLook.autoHide
+        label: root.sharedLabel(root.tr("label.autohideWhen", "Hide"))
         value: root.engine ? root.engine.prefs.autohideWhen : "always"
         options: [
           { value: "always", label: root.tr("autohideWhen.always", "Always") },
@@ -965,11 +1007,11 @@ Column {
 
       SliderRow {
         navKey: "autohideDelay"
-        visible: !!root.engine && root.engine.autoHide
-        label: root.tr("label.autohideDelay", "Hide after")
+        visible: targetLook.autoHide
+        label: root.sharedLabel(root.tr("label.autohideDelay", "Hide after"))
         valueText: root.num(root.engine ? root.engine.prefs.autohideDelay : 320) + " ms"
         minimum: 100
-        maximum: 2000
+        maximum: 3000
         step: 50
         value: root.engine ? root.engine.prefs.autohideDelay : 320
         onChangedValue: function(v) { root.engine.setPref("autohideDelay", Math.round(v)) }
@@ -977,8 +1019,8 @@ Column {
 
       ToggleRow {
         navKey: "revealOnWorkspace"
-        visible: !!root.engine && root.engine.autoHide
-        label: root.tr("label.revealOnWorkspace", "Peek on workspace switch")
+        visible: targetLook.autoHide
+        label: root.sharedLabel(root.tr("label.revealOnWorkspace", "Peek on workspace switch"))
         hint: root.tr("label.revealOnWorkspaceHint", "")
         checked: root.engine ? root.engine.prefs.revealOnWorkspace : false
         onToggled: root.engine.setPref("revealOnWorkspace", !root.engine.prefs.revealOnWorkspace)
@@ -1001,6 +1043,91 @@ Column {
           hint: root.tr("label.updateCheckHint", "")
           checked: root.engine ? root.engine.prefs.updateCheck : false
           onToggled: root.engine.setPref("updateCheck", !root.engine.prefs.updateCheck)
+        }
+      }
+
+      Section {
+        title: root.tr("section.about", "About")
+
+        RowLayout {
+          width: parent.width - Style.spacing.rowPaddingX * 2
+          x: Style.spacing.rowPaddingX
+          spacing: Style.spacing.sm
+
+          Text {
+            Layout.fillWidth: true
+            textFormat: Text.PlainText
+            text: root.tr("about.meta", "Barcraft %1 · %2 · %3")
+              .arg(root.engine && root.engine.pluginVersion ? root.engine.pluginVersion : "0.7.0")
+              .arg(root.engine ? root.engine.pluginLicense : "MIT")
+              .arg(root.engine ? root.engine.pluginAuthor : "frueh")
+            color: root.dimFg
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideRight
+          }
+
+          Text {
+            visible: !!root.engine && root.engine.updateState !== "idle"
+            textFormat: Text.PlainText
+            text: {
+              if (!root.engine) return ""
+              var st = root.engine.updateState
+              if (st === "checking") return root.tr("about.checking", "Checking…")
+              if (st === "uptodate") return root.tr("about.upToDate", "Up to date")
+              if (st === "available") return root.tr("about.updateAvailable", "v%1 available").arg(root.engine.remoteVersion)
+              if (st === "ahead") return root.tr("about.ahead", "Ahead of main (%1)").arg(root.engine.remoteVersion)
+              if (st === "error") return root.tr("about.checkFailed", "Check failed")
+              return ""
+            }
+            color: root.engine && root.engine.updateState === "error" ? Kit.Color.urgent
+              : (root.engine && root.engine.updateState === "available" ? Kit.Color.accent : root.dimFg)
+            font.family: Style.font.family
+            font.pixelSize: Style.font.caption
+            font.bold: !!root.engine && root.engine.updateState === "available"
+          }
+        }
+
+        Flow {
+          width: parent.width - Style.spacing.rowPaddingX * 2
+          x: Style.spacing.rowPaddingX
+          topPadding: Style.spacing.xs
+          spacing: Style.spacing.sm
+
+          ActionButton {
+            navKey: "checkUpdates"
+            navGrid: true
+            text: root.engine && root.engine.updateState === "checking"
+              ? root.tr("about.checking", "Checking…")
+              : root.tr("action.checkUpdates", "Check updates")
+            iconText: "󰚰"
+            onTriggered: if (root.engine) root.engine.checkForUpdates()
+          }
+
+          ActionButton {
+            navKey: "updatePlugin"
+            navGrid: true
+            text: root.tr("action.updateNow", "Update")
+            iconText: "󰇚"
+            selected: !!root.engine && root.engine.updateState === "available"
+            onTriggered: if (root.engine) root.engine.requestPluginUpdate()
+          }
+
+          ActionButton {
+            navKey: "openGithub"
+            navGrid: true
+            text: root.tr("action.github", "GitHub")
+            iconText: "󰊤"
+            onTriggered: if (root.engine) root.engine.openRepository()
+          }
+
+          ActionButton {
+            navKey: "openIssues"
+            navGrid: true
+            text: root.tr("action.issues", "Issues")
+            iconText: "󰗖"
+            onTriggered: if (root.engine) root.engine.openIssues()
+          }
         }
       }
     }
@@ -1107,7 +1234,7 @@ Column {
         inFooter: true
         text: root.tr("action.copyToml", "Copy TOML")
         iconText: "󰆏"
-        onTriggered: if (root.engine) root.engine.copyActiveToml()
+        onTriggered: if (root.engine) root.engine.copyToml(root.screenTarget)
       }
 
       ActionButton {
@@ -1115,7 +1242,7 @@ Column {
         inFooter: true
         text: root.tr("action.paste", "Paste skin")
         iconText: "󰆒"
-        onTriggered: if (root.engine) root.engine.importFromClipboard()
+        onTriggered: if (root.engine) root.engine.importFromClipboard(root.screenTarget)
       }
 
       Item { Layout.fillWidth: true }
@@ -1125,21 +1252,21 @@ Column {
         inFooter: true
         text: root.tr("action.reset", "Reset")
         iconText: "󰜉"
-        onTriggered: if (root.engine) root.engine.resetToPreset()
+        onTriggered: if (root.engine) root.engine.resetTarget(root.screenTarget)
       }
     }
 
     RowLayout {
       width: parent.width
       spacing: Style.spacing.sm
-      visible: !!root.engine && root.engine.canUndoPaste
+      visible: !!root.engine && (root.engine.revision, root.engine.canUndoPasteFor(root.screenTarget))
 
       ActionButton {
         navKey: "undoPaste"
         inFooter: true
         text: root.tr("action.undoPaste", "Undo paste")
         iconText: "󰕌"
-        onTriggered: if (root.engine) root.engine.undoPaste()
+        onTriggered: if (root.engine) root.engine.undoPaste(root.screenTarget)
       }
 
       Item { Layout.fillWidth: true }
@@ -1207,6 +1334,7 @@ Column {
 
     property string navKey: ""
     property bool navEnabled: true
+    property bool inHeader: false
     property bool inFooter: false
     // Left/Right move between tiles or footer controls.
     property bool navGrid: inFooter
@@ -1467,7 +1595,7 @@ Column {
     navPreviewId: cardId
     height: Style.space(52)
 
-    onActivate: root.pickSkin(cardId)
+    onActivate: root.pickSkin(cardId, userSkin)
     onRemove: if (userSkin) root.requestDelete(cardId, title)
     onTextKey: function(t) { if (userSkin && (t === "r" || t === "R")) root.startRename(cardId) }
 
@@ -1491,7 +1619,7 @@ Column {
       onClicked: {
         root.keyboardMode = false
         root.navCurrent = card
-        root.pickSkin(card.cardId)
+        root.pickSkin(card.cardId, card.userSkin)
       }
     }
 

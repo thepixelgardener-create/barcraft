@@ -5,6 +5,31 @@ All notable changes to Barcraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-23
+
+### Added
+
+- **Unified per-screen editing across all Studio tabs**: the monitor selector (**Main skin** or any display) stays pinned across **Skins**, **Colors**, **Geometry**, **Surface**, and **Behavior**. Editing a display creates a persisted per-screen draft (`bar.barcraft.monitorDrafts` in `shell.json`) without altering other displays, and **Copy TOML**, **Paste skin**, **Undo paste**, **Reset**, and **Save** all operate on the selected display. Shared controls (icon size, glass blur, and global auto-hide timing) are clearly labeled when targeting a single screen.
+- **Actionable TOML diagnostics**: pasting a skin with typos (e.g. `heigth = 34`) or an unresolved preset preserves the current draft and reports the offending line, key, and closest suggestion. Clamped out-of-range values (e.g. `height = 999` → `56`) apply and report the adjusted value and line. `omarchy-shell barcraft doctor` reports diagnostics for both watched skin files and the active theme's `[bar-skin]`.
+- **Extracted `SkinStore.qml` & filesystem test suite (`tests/skinstore.test.js`)**: isolates atomic file I/O, directory watching, and skin scanning from `SkinEngine.qml`, with temp-directory regression tests covering failed deletes, legacy sibling cleanup, concurrent external edits, rename rollback, and slow-save token guards.
+- **About & Update section in Studio → Behavior**: displays version, license, author, GitHub/Issues links, an explicit on-demand **Check updates** button (strict HTTPS + semver validation, no background network calls), and an **Update** action that launches Omarchy's interactive `omarchy plugin update thepixelgardener.barcraft` terminal flow.
+- **Amiga Wild Craft preset & upgraded Matrix / Runeforge art**: added the new **Amiga** preset (Workbench blue pixel bevels, OCS/ECS copper sheen, checkered Boing Ball gadget, and front-to-back depth gadget) and upgraded **Matrix** (multi-depth rain with glowing trails, aperture grille, PCB signal rails, telemetry pips, and bloom HUD brackets) and **Runeforge** (hammered basalt sheen, forged rivets, dwarven rail fretwork, keystone crests, and glowing Elder Futhark rune medallions).
+
+### Changed
+
+- **Reliable save, rename, and delete**: deleting a skin now confirms file removal (including shadowed copies in `~/.config/omarchy/bar-skins/`) before updating Studio state or reporting success; renaming verifies old-file removal and rolls back cleanly on failure; overwriting a skin modified externally warns before clobbering; and slow async saves no longer clear newer edits or skin switches.
+- **Tighter `BarcraftMark` bar icon**: reduced default mark width from `1.4 × iconCanvas` (22×11 px) to `1.25 × iconSize` (15×9 px) with balanced inner proportions so it sits cleanly inside Omarchy's 27 px `iconSlot` alongside standard bar glyphs.
+- **Cleaner TOML exports**: **Copy TOML** now mentions `shell.bar-skin.toml` in its header comment and omits inactive sub-keys (`theme-tint`, `bezel-strength`, `shadow-strength`, `border-alpha`/`border-width`, `hover-edge-px`/`accent-hairline`) when their parent feature is off.
+- **Per-monitor Barcraft pill tooltip**: hovering the Barcraft widget on any display now reports the skin that display is wearing.
+
+### Fixed
+
+- Aligned all Studio slider limits with `SkinParser.js` (`height` 22–56, `edge-margin` 0–24, `side-margin` 0–48, `radius` 0–28, `bezel-strength` 0.15–1.0, `autohide-delay` 100–3000 ms).
+- Disambiguated reserved skin names (`standard`, `draft`, `theme`, `theme-skin`) on both new saves and existing files on disk so a saved skin named `Standard` can no longer trigger **Omarchy standard** mode. A skin saved as `Draft` or `Standard` in 0.6 loads as `draft-saved` / `standard-saved`, and the bar and per-monitor choices that wore it move over with it.
+- A broken or empty skin file no longer hides a working skin of the same name in the other skins folder, and `doctor` reports empty files as empty.
+- Saving a skin keeps values for features that are switched off (e.g. `hover-edge-px` while the bar is always shown), so switching the feature back on restores them; only **Copy TOML** leaves them out.
+- The **Amiga** preset shows its own Workbench blue and orange; tinting with the theme stays available through **Tint art with theme**.
+
 ## [0.6.0] - 2026-11-21
 
 ### Added

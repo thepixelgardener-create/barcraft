@@ -110,7 +110,10 @@ BarWidget {
       var eng = root.skinEngine
       if (!eng) return barcraftStrings.t("tooltip").arg("")
       eng.revision
-      var name = eng.standard ? barcraftStrings.t("label.standard") : (eng.committedSkin ? eng.committedSkin.name : "")
+      var screenName = root.bar && root.bar.screenName ? root.bar.screenName : ""
+      var name = typeof eng.currentName === "function"
+        ? eng.currentName(screenName)
+        : (eng.standard ? barcraftStrings.t("label.standard") : (eng.committedSkin ? eng.committedSkin.name : ""))
       return barcraftStrings.t("tooltip").arg(SkinParser.neutralizeMarkup(name))
     }
     onPressed: function(mouseButton) {

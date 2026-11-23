@@ -23,7 +23,7 @@ Drop any `.toml` file into `~/.config/omarchy/bar/skins/` (reloads automatically
 
 ### Shorthand (extend a built-in preset)
 
-Set `preset` to any built-in (`floating`, `islands`, `frosted`, `capsule`, `editorial`, `matrix`, `runeforge`, `statusline`) or saved skin ID and override only the keys you want to change:
+Set `preset` to any built-in (`floating`, `islands`, `frosted`, `capsule`, `editorial`, `matrix`, `runeforge`, `amiga`, `statusline`) or saved skin ID and override only the keys you want to change:
 
 ```toml
 [bar-skin]
@@ -87,7 +87,7 @@ name              = "Islands"
 description       = "Separate floating pills for left, center, and right"
 preset            = "islands"        # optional base: any built-in or saved skin id
 mode              = "islands"        # edge | floating | islands
-art               = "none"           # none | matrix | runeforge
+art               = "none"           # none | matrix | runeforge | amiga
 theme-tint        = false            # recolor Wild Craft art with the active theme
 bezel             = "none"           # none | raised | inset | ridge | glass
 bezel-strength    = 0.75             # 0.15 - 1.00

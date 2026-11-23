@@ -13,11 +13,12 @@ Item {
   property color accent: Commons.Color.accent
   property bool lit: false
 
-  implicitWidth: Math.round(Style.bar.iconCanvas * 1.4)
-  implicitHeight: Math.round(implicitWidth * 0.5)
+  implicitWidth: Math.round(Style.bar.iconSize * 1.25)
+  implicitHeight: Math.round(implicitWidth * 0.6)
 
   readonly property real rim: Math.max(1, Math.round(height * 0.11))
   readonly property real inner: Math.max(0, height - rim * 2)
+  readonly property real sideInset: rim + Math.max(2, Math.round(inner * 0.28))
 
   // Body: the face falls from lit to shade under a solid rim.
   Rectangle {
@@ -34,7 +35,7 @@ Item {
 
   // Bezel: light along the inside of the top edge, shade along the bottom.
   Rectangle {
-    x: Math.round(mark.height * 0.42)
+    x: Math.round(mark.height * 0.45)
     y: mark.rim
     width: Math.max(0, mark.width - x * 2)
     height: Math.max(1, Math.round(mark.rim * 0.8))
@@ -43,7 +44,7 @@ Item {
   }
 
   Rectangle {
-    x: Math.round(mark.height * 0.42)
+    x: Math.round(mark.height * 0.45)
     y: mark.height - mark.rim - height
     width: Math.max(0, mark.width - x * 2)
     height: Math.max(1, Math.round(mark.rim * 0.8))
@@ -53,8 +54,8 @@ Item {
 
   // The bar's own widgets, as on the app icon: accent dot, label, status.
   Rectangle {
-    readonly property real d: Math.max(2, Math.round(mark.inner * 0.42))
-    x: mark.rim + Math.max(1, Math.round(mark.inner * 0.22))
+    readonly property real d: Math.max(2, Math.round(mark.inner * 0.32))
+    x: mark.sideInset
     anchors.verticalCenter: parent.verticalCenter
     width: d
     height: d
@@ -74,7 +75,7 @@ Item {
     readonly property real d: Math.max(2, Math.round(mark.inner * 0.28))
     anchors.verticalCenter: parent.verticalCenter
     anchors.right: parent.right
-    anchors.rightMargin: mark.rim + Math.max(1, Math.round(mark.inner * 0.22))
+    anchors.rightMargin: mark.sideInset
     width: d
     height: d
     radius: d / 2

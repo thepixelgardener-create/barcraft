@@ -71,7 +71,8 @@ omarchy-shell barcraft doctor                          # health report
 ## Development
 
 ```bash
-node tests/skinparser.test.js                          # parser, TOML, shell.json state, menu block, icon tokens
+node tests/skinparser.test.js                          # parser, diagnostics, TOML, shell.json state, menu block, icon tokens
+node tests/skinstore.test.js                           # atomic file I/O, failed delete, external edits, rename rollback, slow-save guards
 QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests
 omarchy plugin validate .
 omarchy agent look plugin .
@@ -88,8 +89,9 @@ scripts/sync-upstream.sh                               # 3-way merge Omarchy's b
 
 | File | Role |
 | --- | --- |
-| [`SkinParser.js`](../SkinParser.js) | TOML subset, validation, built-in skins, `shell.json` state, menu block, icon tokens |
-| [`SkinEngine.qml`](../SkinEngine.qml) | State, saving, live previews, per-monitor skins, blur sync, clipboard, doctor |
+| [`SkinParser.js`](../SkinParser.js) | TOML subset, diagnostics, validation, built-in skins, `shell.json` state, menu block, icon tokens |
+| [`SkinStore.qml`](../SkinStore.qml) | Verified atomic file I/O, saved-skin scanning, and `inotifywait` directory watching |
+| [`SkinEngine.qml`](../SkinEngine.qml) | State, per-monitor drafts & saving, live previews, blur sync, clipboard, doctor |
 | [`SkinLook.qml`](../SkinLook.qml) | Resolved colors & geometry (`"auto"` included) per bar surface and thumbnail |
 | [`Bar.qml`](../Bar.qml) | Omarchy's bar with skinned surfaces, auto-hide, widget pills/chips, IPC |
 | [`BarWidget.qml`](../BarWidget.qml), [`StudioContent.qml`](../StudioContent.qml) | Bar pill widget and keyboard-driven Studio panel |

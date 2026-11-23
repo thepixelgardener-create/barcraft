@@ -72,8 +72,10 @@ jobs:
             console.log(`Checked manifest (${manifest.version}), ${enKeys.length} i18n keys, and QML invariants.`);
           '
 
-      - name: Run SkinParser & security tests
-        run: node tests/skinparser.test.js
+      - name: Run SkinParser, SkinStore & security tests
+        run: |
+          node tests/skinparser.test.js
+          node tests/skinstore.test.js
 
       - name: Install Qt 6 test dependencies
         run: |
