@@ -6,13 +6,101 @@
 // No QML imports, so the regression tests in tests/ run it under node.
 
 var VALID_MODES = ["edge", "floating", "islands"]
-var VALID_ARTS = ["none", "matrix", "runeforge"]
+var VALID_ARTS = ["none", "matrix", "runeforge", "amiga"]
 var VALID_BEZELS = ["none", "raised", "inset", "ridge", "glass"]
 var VALID_BORDERS = ["none", "subtle", "accent", "hyprland"]
 var VALID_VISIBILITY = ["always", "autohide"]
 var VALID_WIDGET_STYLES = ["plain", "pills", "chips"]
 var VALID_FILLS = ["solid", "gradient"]
 var VALID_AUTOHIDE_WHEN = ["always", "windows"]
+var RESERVED_SKIN_IDS = ["standard", "draft", "theme", "theme-skin"]
+
+function isReservedSkinId(slug, builtinList) {
+  var s = String(slug || "").trim().toLowerCase()
+  if (!s) return true
+  if (RESERVED_SKIN_IDS.indexOf(s) !== -1) return true
+  if (canonicalSkinId(s) !== s) return true
+  var list = Array.isArray(builtinList) ? builtinList : builtinSkins()
+  for (var i = 0; i < list.length; i++) {
+    if (list[i] && list[i].id === s) return true
+  }
+  return false
+}
+
+// Verified atomic file I/O shell scripts shared by SkinStore.qml and tests.
+// Exit codes for WRITE_FILE_SCRIPT:
+//   0 written (and old removed if requested)
+//   1 failed (or rolled back when old could not be removed)
+//   2 target already exists (noClobber)
+//   3 target changed on disk since it was read (expect mismatch)
+//   4 target written, old file could not be removed and rollback failed
+var WRITE_FILE_SCRIPT =
+  "dest=$1; want=$2; noclobber=$3; mkexec=$4; old=$5; expect=$6; " +
+  "md5() { md5sum | cut -d' ' -f1; }; " +
+  "[ -n \"$dest\" ] && [ ! -L \"$dest\" ] || exit 1; " +
+  "if [ \"$noclobber\" = 1 ] && [ -e \"$dest\" ]; then exit 2; fi; " +
+  "dir=$(dirname -- \"$dest\"); " +
+  "mkdir -p -- \"$dir\" || exit 1; " +
+  "tmp=$(mktemp \"$dir/.barcraft.XXXXXX\") || exit 1; " +
+  "trap 'rm -f -- \"$tmp\"' EXIT; " +
+  "cat > \"$tmp\" || exit 1; " +
+  "[ \"$(md5 < \"$tmp\")\" = \"$want\" ] || exit 1; " +
+  "if [ -f \"$dest\" ]; then chmod --reference=\"$dest\" -- \"$tmp\" || exit 1; " +
+  "else m=$(umask); chmod \"$(printf '%o' $(( 0666 & ~m )))\" -- \"$tmp\" || exit 1; fi; " +
+  "if [ \"$mkexec\" = 1 ]; then chmod 0755 -- \"$tmp\" || exit 1; fi; " +
+  "if [ \"$expect\" = missing ]; then ln -- \"$tmp\" \"$dest\" 2>/dev/null || exit 3; " +
+  "elif [ \"$noclobber\" = 1 ]; then ln -- \"$tmp\" \"$dest\" 2>/dev/null || exit 2; " +
+  "else " +
+  "  if [ -n \"$expect\" ]; then " +
+  "    [ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$expect\" ] || exit 3; " +
+  "  fi; " +
+  "  mv -f -- \"$tmp\" \"$dest\" || exit 1; " +
+  "fi; " +
+  "rm -f -- \"$tmp\"; trap - EXIT; " +
+  "[ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$want\" ] || exit 1; " +
+  "if [ -n \"$old\" ] && [ \"$old\" != \"$dest\" ]; then " +
+  "  if [ -L \"$old\" ] || { [ -e \"$old\" ] && [ ! -f \"$old\" ]; }; then " +
+  "    if [ \"$noclobber\" = 1 ]; then rm -f -- \"$dest\" 2>/dev/null; [ ! -e \"$dest\" ] && exit 1 || exit 4; fi; " +
+  "    exit 4; " +
+  "  fi; " +
+  "  if [ -f \"$old\" ]; then " +
+  "    rm -- \"$old\" 2>/dev/null; " +
+  "    if [ -e \"$old\" ]; then " +
+  "      if [ \"$noclobber\" = 1 ]; then rm -f -- \"$dest\" 2>/dev/null; [ ! -e \"$dest\" ] && exit 1 || exit 4; fi; " +
+  "      exit 4; " +
+  "    fi; " +
+  "  fi; " +
+  "fi"
+
+// Removes one or more regular non-symlink skin files and verifies none remain.
+// Exit codes: 0 removed (or already absent), 1 failed to remove / symlink.
+var REMOVE_SKIN_FILES_SCRIPT =
+  "rc=0; " +
+  "for p in \"$@\"; do " +
+  "  [ -n \"$p\" ] || continue; " +
+  "  if [ -L \"$p\" ]; then rc=1; continue; fi; " +
+  "  if [ ! -e \"$p\" ]; then continue; fi; " +
+  "  if [ ! -f \"$p\" ]; then rc=1; continue; fi; " +
+  "  rm -- \"$p\" 2>/dev/null; " +
+  "  if [ -e \"$p\" ]; then rc=1; fi; " +
+  "done; " +
+  "exit \"$rc\""
+
+// Removes a regular file only while it still has the expected MD5.
+// Exit codes: 0 removed, 3 missing or changed, 1 failed.
+var REMOVE_IF_UNCHANGED_SCRIPT =
+  "p=$1; h=$2; " +
+  "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ \"$(md5sum < \"$p\" | cut -d' ' -f1)\" = \"$h\" ] || exit 3; " +
+  "rm -- \"$p\" 2>/dev/null && [ ! -e \"$p\" ] || exit 1"
+
+// Fresh uncached read of a regular non-symlink file.
+// Exit codes: 0 ok (content on stdout), 3 missing, 4 unreadable/symlink/error.
+var READ_FILE_SCRIPT =
+  "p=$1; " +
+  "[ -n \"$p\" ] || exit 4; " +
+  "if [ ! -e \"$p\" ] && [ ! -L \"$p\" ]; then exit 3; fi; " +
+  "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ -r \"$p\" ] || exit 4; " +
+  "cat -- \"$p\""
 
 function dict(entries) {
   var o = Object.create(null)
@@ -296,16 +384,23 @@ function builtinSkins() {
     }),
     preset({
       id: "matrix", name: "Matrix", category: "wild", art: "matrix",
-      description: "CRT phosphor terminal with digital rain & corner brackets",
+      description: "CRT phosphor construct with layered digital rain, PCB traces & bloom brackets",
       height: 30, edgeMargin: 6, sideMargin: 10, innerPadding: 12, radius: 2,
       backgroundAlpha: 0.98, customForeground: "#7dffb0",
       border: "none", borderAlpha: 0.0, borderWidth: 0
     }),
     preset({
       id: "runeforge", name: "Runeforge", category: "wild", art: "runeforge",
-      description: "Chamfered obsidian basalt & hairline etched antique brass",
+      description: "Hammered obsidian basalt, riveted antique brass & molten Elder Futhark runes",
       height: 32, edgeMargin: 6, sideMargin: 10, innerPadding: 14, radius: 0,
       backgroundAlpha: 0.98,
+      border: "none", borderAlpha: 0.0, borderWidth: 0
+    }),
+    preset({
+      id: "amiga", name: "Amiga", category: "wild", art: "amiga",
+      description: "Workbench blue pixel bevels, copper sheen, Boing Ball & depth gadget",
+      height: 30, edgeMargin: 4, sideMargin: 8, innerPadding: 12, radius: 0,
+      backgroundAlpha: 0.98, customForeground: "#ffffff",
       border: "none", borderAlpha: 0.0, borderWidth: 0
     }),
     preset({
@@ -511,13 +606,17 @@ function parseTomlValue(rest) {
 // { "<section>": { key: "raw value" } }, top-level keys under "".
 // Uses null-prototype maps and drops prototype-chain keys to prevent
 // Object.prototype pollution from untrusted TOML input.
-function parseTomlSections(text) {
+function parseTomlSectionsWithLines(text) {
   var out = Object.create(null)
+  var linesMap = Object.create(null)
   out[""] = Object.create(null)
+  linesMap[""] = Object.create(null)
   var section = ""
   var ignoreSection = false
+  var syntaxErrors = []
   var lines = String(text || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
+    var lineNo = i + 1
     var line = lines[i].trim()
     if (!line || line.charAt(0) === "#") continue
     var sec = line.match(/^\[([A-Za-z0-9_.-]+)\]\s*(#.*)?$/)
@@ -528,19 +627,194 @@ function parseTomlSections(text) {
       }
       ignoreSection = false
       section = sec[1]
-      if (!out[section]) out[section] = Object.create(null)
+      if (!out[section]) {
+        out[section] = Object.create(null)
+        linesMap[section] = Object.create(null)
+      }
       continue
     }
     if (ignoreSection) continue
     var kv = line.match(/^(?:"([^"\\]{1,64})"|([A-Za-z0-9_-]{1,64}))\s*=\s*(.*)$/)
-    if (!kv) continue
+    if (!kv) {
+      if (section === "bar-skin" || section === "") {
+        syntaxErrors.push({ line: lineNo, key: "", message: "Line " + lineNo + ": invalid TOML syntax" })
+      }
+      continue
+    }
     var key = kv[1] !== undefined ? kv[1] : kv[2]
     if (isUnsafeKey(key)) continue
     var value = parseTomlValue(kv[3])
-    if (value === null) continue
+    if (value === null) {
+      if (section === "bar-skin" || section === "") {
+        syntaxErrors.push({ line: lineNo, key: key, message: "Line " + lineNo + ": invalid value for \"" + key + "\"" })
+      }
+      continue
+    }
     out[section][key] = value
+    linesMap[section][key] = lineNo
   }
-  return out
+  return { sections: out, lines: linesMap, syntaxErrors: syntaxErrors }
+}
+
+function parseTomlSections(text) {
+  return parseTomlSectionsWithLines(text).sections
+}
+
+// Damerau-Levenshtein <= 2 so single transpositions like "heigth" -> "height" match with distance 1.
+function closestKeySuggestion(badKey) {
+  var target = String(badKey || "").toLowerCase()
+  if (!target || target.length > 40) return ""
+  var best = ""
+  var bestDist = 3
+  var candidates = ["preset"]
+  for (var k in KEY_MAP) if (hasOwn(KEY_MAP, k)) candidates.push(k)
+  for (var i = 0; i < candidates.length; i++) {
+    var c = candidates[i]
+    if (Math.abs(c.length - target.length) > 2) continue
+    var m = target.length
+    var n = c.length
+    var d = []
+    for (var a = 0; a <= m; a++) {
+      d[a] = [a]
+    }
+    for (var b = 0; b <= n; b++) d[0][b] = b
+    for (var r = 1; r <= m; r++) {
+      for (var col = 1; col <= n; col++) {
+        var cost = target.charAt(r - 1) === c.charAt(col - 1) ? 0 : 1
+        var v = Math.min(d[r - 1][col] + 1, d[r][col - 1] + 1, d[r - 1][col - 1] + cost)
+        if (r > 1 && col > 1 && target.charAt(r - 1) === c.charAt(col - 2) && target.charAt(r - 2) === c.charAt(col - 1)) {
+          v = Math.min(v, d[r - 2][col - 2] + 1)
+        }
+        d[r][col] = v
+      }
+    }
+    if (d[m][n] < bestDist) {
+      bestDist = d[m][n]
+      best = c
+    }
+  }
+  return bestDist <= 2 ? best : ""
+}
+
+function formatLinePrefix(lineNo) {
+  return lineNo > 0 ? ("Line " + lineNo + ": ") : ""
+}
+
+var NUMERIC_SPECS = dict({
+  "bezel-strength": { min: 0.15, max: 1.0, allowAuto: false, whole: false },
+  "contrast": { min: 0.5, max: 1.5, allowAuto: false, whole: false },
+  "surface-tone": { min: 0.5, max: 1.5, allowAuto: false, whole: false },
+  "height": { min: 22, max: 56, allowAuto: true, whole: true },
+  "edge-margin": { min: 0, max: 24, allowAuto: true, whole: true },
+  "side-margin": { min: 0, max: 48, allowAuto: true, whole: true },
+  "width": { min: 30, max: 100, allowAuto: false, whole: true },
+  "section-gap": { min: 0, max: 32, allowAuto: false, whole: true },
+  "inner-padding": { min: 4, max: 24, allowAuto: false, whole: true },
+  "inner-padding-x": { min: 4, max: 24, allowAuto: false, whole: true },
+  "radius": { min: 0, max: 28, allowAuto: true, whole: true },
+  "icon-scale": { min: 0.8, max: 1.5, allowAuto: false, whole: false },
+  "background-alpha": { min: 0, max: 1.0, allowAuto: true, whole: false },
+  "border-alpha": { min: 0, max: 1.0, allowAuto: false, whole: false },
+  "border-width": { min: 0, max: 4, allowAuto: false, whole: true },
+  "shadow-strength": { min: 0.1, max: 1.0, allowAuto: false, whole: false },
+  "hover-edge-px": { min: 1, max: 16, allowAuto: false, whole: true }
+})
+
+var BOOL_KEYS = dict({
+  "theme-tint": true,
+  "blur": true,
+  "shadow": true,
+  "accent-hairline": true
+})
+
+var COLOR_REF_KEYS = dict({
+  "custom-background": true,
+  "custom-foreground": true,
+  "custom-accent": true,
+  "gradient-to": true
+})
+
+function validateRawEntry(key, rawVal, lineNo, errors, adjustments) {
+  var prefix = formatLinePrefix(lineNo)
+  var str = String(rawVal === undefined || rawVal === null ? "" : rawVal).trim()
+  var low = str.toLowerCase()
+
+  if (key === "name" || key === "description" || key === "id") {
+    return true
+  }
+  if (key === "mode") {
+    if (low === "stealth" || VALID_MODES.indexOf(low) !== -1) return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid mode \"" + str + "\"" })
+    return false
+  }
+  if (key === "art") {
+    var artVal = hasOwn(ART_ALIASES, low) ? ART_ALIASES[low] : low
+    if (VALID_ARTS.indexOf(artVal) !== -1) return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid art \"" + str + "\"" })
+    return false
+  }
+  if (key === "bezel") {
+    if (VALID_BEZELS.indexOf(low) !== -1) return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid bezel \"" + str + "\"" })
+    return false
+  }
+  if (key === "border") {
+    var bVal = (low === "hyprland.active-border" || low === "hyprland.active-border-foreground") ? "hyprland" : low
+    if (VALID_BORDERS.indexOf(bVal) !== -1) return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid border \"" + str + "\"" })
+    return false
+  }
+  if (key === "fill") {
+    if (VALID_FILLS.indexOf(low) !== -1) return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid fill \"" + str + "\"" })
+    return false
+  }
+  if (key === "widget-style") {
+    if (VALID_WIDGET_STYLES.indexOf(low) !== -1) return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid widget-style \"" + str + "\"" })
+    return false
+  }
+  if (key === "visibility") {
+    if (VALID_VISIBILITY.indexOf(low) !== -1) return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid visibility \"" + str + "\"" })
+    return false
+  }
+  if (key === "background") {
+    if (low === "bar.background" || normalizeColorRef(str) !== "") return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid background color \"" + str + "\"" })
+    return false
+  }
+  if (hasOwn(COLOR_REF_KEYS, key)) {
+    if (str === "" || normalizeColorRef(str) !== "") return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid color \"" + str + "\" for " + key })
+    return false
+  }
+  if (hasOwn(BOOL_KEYS, key)) {
+    if (typeof rawVal === "boolean" || low === "true" || low === "false" || low === "1" || low === "0" || low === "yes" || low === "no") return true
+    errors.push({ line: lineNo, key: key, message: prefix + "invalid boolean \"" + str + "\" for " + key })
+    return false
+  }
+  if (hasOwn(NUMERIC_SPECS, key)) {
+    var spec = NUMERIC_SPECS[key]
+    if (spec.allowAuto && low === "auto") return true
+    var num = Number(str)
+    if (str === "" || !isFinite(num)) {
+      errors.push({ line: lineNo, key: key, message: prefix + "invalid number \"" + str + "\" for " + key })
+      return false
+    }
+    var clamped = Math.max(spec.min, Math.min(spec.max, num))
+    var applied = spec.whole ? Math.round(clamped) : round2(clamped)
+    if (num < spec.min || num > spec.max) {
+      adjustments.push({
+        line: lineNo,
+        key: key,
+        applied: applied,
+        message: prefix + key + " adjusted to " + applied
+      })
+    }
+    return true
+  }
+  return false
 }
 
 function tomlString(text) {
@@ -601,6 +875,58 @@ function copySkin(skin) {
 
 // `lookup(id)` resolves `preset = "<skin id>"`, so a theme can name a skin
 // in one line and override only what it wants on top of it.
+function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
+  var errors = Array.isArray(extraErrors) ? extraErrors.slice() : []
+  var adjustments = []
+  var appliedCount = 0
+  var base = null
+  if (map["preset"] !== undefined) {
+    var presetName = String(map["preset"] || "").trim()
+    var pLine = lineMap && lineMap["preset"] ? lineMap["preset"] : 0
+    if (typeof lookup === "function") base = lookup(presetName)
+    if (base) {
+      appliedCount++
+    } else {
+      errors.push({
+        line: pLine,
+        key: "preset",
+        message: formatLinePrefix(pLine) + "unknown preset \"" + presetName + "\""
+      })
+    }
+  }
+  var merged = base ? copySkin(base) : {}
+  var named = false
+  for (var key in map) {
+    if (!hasOwn(map, key) || isUnsafeKey(key) || key === "preset") continue
+    var lineNo = lineMap && lineMap[key] ? lineMap[key] : 0
+    var field = hasOwn(KEY_MAP, key) ? KEY_MAP[key] : ""
+    if (!field) {
+      var sug = closestKeySuggestion(key)
+      errors.push({
+        line: lineNo,
+        key: key,
+        suggestion: sug,
+        message: formatLinePrefix(lineNo) + "unknown key \"" + key + "\"" + (sug ? " (did you mean \"" + sug + "\"?)" : "")
+      })
+      continue
+    }
+    if (key === "inner-padding" && map["inner-padding-x"] !== undefined) continue
+    if (!validateRawEntry(key, map[key], lineNo, errors, adjustments)) continue
+    merged[field] = map[key]
+    appliedCount++
+    if (field === "name") named = true
+  }
+  if (!named && !base) merged.name = fallbackId
+  if (!merged.id) merged.id = fallbackId
+  var skin = appliedCount > 0 ? normalizeSkin(merged, fallbackId, source) : null
+  return {
+    skin: skin,
+    appliedCount: appliedCount,
+    errors: errors,
+    adjustments: adjustments
+  }
+}
+
 function skinFromKvMap(map, fallbackId, source, lookup) {
   var base = null
   if (map["preset"] !== undefined && typeof lookup === "function") base = lookup(String(map["preset"]))
@@ -619,18 +945,56 @@ function skinFromKvMap(map, fallbackId, source, lookup) {
   return normalizeSkin(merged, fallbackId, source)
 }
 
-function extractSkinKvMap(text) {
+function extractSkinKvMapWithLines(text) {
   var raw = String(text || "")
   if (!raw.trim()) return null
-  var sections = parseTomlSections(raw)
+  var parsed = parseTomlSectionsWithLines(raw)
+  var sections = parsed.sections
+  var lines = parsed.lines
   var map = Object.create(null)
+  var lineMap = Object.create(null)
   var found = false
   var top = sections[""] || Object.create(null)
+  var topLines = lines[""] || Object.create(null)
   var skinSec = sections["bar-skin"] || Object.create(null)
+  var skinLines = lines["bar-skin"] || Object.create(null)
+  var hasSkinSection = hasOwn(sections, "bar-skin")
   var k
-  for (k in top) { if (hasOwn(KEY_MAP, k) || k === "preset") { map[k] = top[k]; found = true } }
-  for (k in skinSec) { if (!isUnsafeKey(k)) { map[k] = skinSec[k]; found = true } }
-  return found ? map : null
+  for (k in top) {
+    if (hasOwn(KEY_MAP, k) || k === "preset") {
+      map[k] = top[k]
+      lineMap[k] = topLines[k] || 0
+      found = true
+    }
+  }
+  for (k in skinSec) {
+    if (!isUnsafeKey(k)) {
+      map[k] = skinSec[k]
+      lineMap[k] = skinLines[k] || 0
+      found = true
+    }
+  }
+  if (!found && !hasSkinSection) {
+    return parsed.syntaxErrors.length ? { map: map, lineMap: lineMap, syntaxErrors: parsed.syntaxErrors, hasSection: false } : null
+  }
+  return { map: map, lineMap: lineMap, syntaxErrors: parsed.syntaxErrors, hasSection: hasSkinSection }
+}
+
+function extractSkinKvMap(text) {
+  var extracted = extractSkinKvMapWithLines(text)
+  if (!extracted) return null
+  for (var k in extracted.map) {
+    if (hasOwn(extracted.map, k)) return extracted.map
+  }
+  return null
+}
+
+function inspectToml(text, fallbackId, source, lookup) {
+  var extracted = extractSkinKvMapWithLines(text)
+  if (!extracted) {
+    return { skin: null, appliedCount: 0, errors: [], adjustments: [] }
+  }
+  return inspectKvMap(extracted.map, extracted.lineMap, fallbackId, source, lookup, extracted.syntaxErrors)
 }
 
 function parseToml(text, fallbackId, source, lookup) {
@@ -639,10 +1003,25 @@ function parseToml(text, fallbackId, source, lookup) {
   return skinFromKvMap(map, fallbackId, source, lookup)
 }
 
+// Disambiguates an existing user skin file whose filename slug collides with a
+// reserved built-in action id ("standard", "theme", "theme-skin", "draft").
+function safeUserSlug(baseSlug, usedMap) {
+  var slug = baseSlug
+  if (RESERVED_SKIN_IDS.indexOf(slug) === -1) return slug
+  var candidate = (slug + "-saved").slice(0, 40)
+  var n = 2
+  while (hasOwn(usedMap, candidate) || RESERVED_SKIN_IDS.indexOf(candidate) !== -1) {
+    var suffix = "-" + n
+    candidate = (slug + "-saved").slice(0, Math.max(1, 40 - suffix.length)) + suffix
+    n++
+  }
+  return candidate
+}
+
 // Indexes all skin files first, then resolves `preset = "<id>"` inheritance
 // across the whole library in one pass (handling arbitrary file order,
 // multi-level chains, and cycles cleanly). Earlier rows win a slug clash.
-function parseSkinLibrary(rows, allowedDirs, builtinList) {
+function parseSkinLibraryDetailed(rows, allowedDirs, builtinList) {
   var list = Array.isArray(rows) ? rows : []
   var builtins = Array.isArray(builtinList) ? builtinList : builtinSkins()
   var builtinById = Object.create(null)
@@ -660,16 +1039,38 @@ function parseSkinLibrary(rows, allowedDirs, builtinList) {
 
   var order = []
   var rawBySlug = Object.create(null)
+  var seenFileSlugs = Object.create(null)
+  var renamedIds = Object.create(null)
+  var diagnostics = []
   for (var i = 0; i < list.length; i++) {
     var row = list[i]
     if (!row || typeof row !== "object") continue
     var file = String(row.path || "")
     if (!isSafeSkinPath(file, allowedDirs)) continue
-    var slug = slugify(file.replace(/^.*\//, "").replace(/\.toml$/, ""))
+    var fileSlug = slugify(file.replace(/^.*\//, "").replace(/\.toml$/, ""))
+    if (hasOwn(seenFileSlugs, fileSlug)) continue
+    var extracted = extractSkinKvMapWithLines(row.text)
+    if (!extracted) {
+      var empty = String(row.text || "").trim() === ""
+      diagnostics.push({ path: file, errors: [{ line: 0, key: "", message: empty ? "File is empty" : "No [bar-skin] section found" }], adjustments: [] })
+      continue
+    }
+    // Only a file with a [bar-skin] section claims its name, so a broken copy
+    // never hides a working one in the other folder.
+    seenFileSlugs[fileSlug] = true
+    var slug = safeUserSlug(fileSlug, rawBySlug)
+    // A reserved name moved aside ("standard" -> "standard-saved") can meet a
+    // later file of that very name; the earlier row wins, as for any clash.
     if (hasOwn(rawBySlug, slug)) continue
-    var map = extractSkinKvMap(row.text)
-    if (!map) continue
-    rawBySlug[slug] = { slug: slug, path: file, map: map }
+    if (slug !== fileSlug) renamedIds[fileSlug] = slug
+    rawBySlug[slug] = {
+      slug: slug,
+      fileSlug: fileSlug,
+      path: file,
+      map: extracted.map,
+      lineMap: extracted.lineMap,
+      syntaxErrors: extracted.syntaxErrors
+    }
     order.push(slug)
   }
 
@@ -681,18 +1082,28 @@ function parseSkinLibrary(rows, allowedDirs, builtinList) {
     if (hasOwn(visiting, slug) || !hasOwn(rawBySlug, slug)) return null
     visiting[slug] = true
     var entry = rawBySlug[slug]
-    var skin = skinFromKvMap(entry.map, slug, "user", function(parentId) {
+    var inspected = inspectKvMap(entry.map, entry.lineMap, slug, "user", function(parentId) {
       var target = String(parentId || "").trim()
       if (!target) return null
+      var targetSlug = slugify(target)
       var parentKey = hasOwn(rawBySlug, target) ? target
-        : (hasOwn(rawBySlug, slugify(target)) ? slugify(target) : "")
+        : (hasOwn(rawBySlug, targetSlug) ? targetSlug
+        : (hasOwn(renamedIds, targetSlug) ? renamedIds[targetSlug] : ""))
       if (parentKey && !hasOwn(visiting, parentKey)) {
         var fromUser = resolveSlug(parentKey)
         if (fromUser) return fromUser
       }
       return lookupBuiltin(target)
-    })
+    }, entry.syntaxErrors)
     delete visiting[slug]
+    if (inspected.errors.length > 0 || inspected.adjustments.length > 0) {
+      diagnostics.push({
+        path: entry.path,
+        errors: inspected.errors,
+        adjustments: inspected.adjustments
+      })
+    }
+    var skin = inspected.skin
     if (!skin) return null
     skin.id = slug
     skin.source = "user"
@@ -707,7 +1118,16 @@ function parseSkinLibrary(rows, allowedDirs, builtinList) {
     var s = resolveSlug(order[j])
     if (s) parsed.push(s)
   }
-  return parsed
+  // old file slug -> id it loads under, for reserved names moved aside.
+  var renamed = {}
+  for (var oldId in renamedIds) {
+    if (hasOwn(resolved, renamedIds[oldId])) renamed[oldId] = renamedIds[oldId]
+  }
+  return { skins: parsed, diagnostics: diagnostics, renamedIds: renamed }
+}
+
+function parseSkinLibrary(rows, allowedDirs, builtinList) {
+  return parseSkinLibraryDetailed(rows, allowedDirs, builtinList).skins
 }
 
 // Classifies one `inotifywait --format '%w|%e|%f'` line against the skin
@@ -750,8 +1170,10 @@ function classifySkinWatchEvent(line, userSkinsDir, legacySkinsDir, configDir) {
   return "ignore"
 }
 
-function parseFromShellValues(shellValues, lookup) {
-  if (!shellValues || typeof shellValues !== "object") return null
+function inspectShellValues(shellValues, lookup) {
+  if (!shellValues || typeof shellValues !== "object") {
+    return { skin: null, appliedCount: 0, errors: [], adjustments: [] }
+  }
   var map = Object.create(null)
   var found = false
   var prefix = "bar-skin."
@@ -765,10 +1187,14 @@ function parseFromShellValues(shellValues, lookup) {
       }
     }
   }
-  if (!found) return null
-  var skin = skinFromKvMap(map, "theme-skin", "theme", lookup)
-  skin.id = "theme-skin"
-  return skin
+  if (!found) return { skin: null, appliedCount: 0, errors: [], adjustments: [] }
+  var res = inspectKvMap(map, null, "theme-skin", "theme", lookup, [])
+  if (res.skin) res.skin.id = "theme-skin"
+  return res
+}
+
+function parseFromShellValues(shellValues, lookup) {
+  return inspectShellValues(shellValues, lookup).skin
 }
 
 function tomlNumberOrAuto(value, fixed) {
@@ -776,19 +1202,23 @@ function tomlNumberOrAuto(value, fixed) {
   return fixed ? Number(value).toFixed(2) : String(value)
 }
 
-function serializeToml(skin) {
+// `options.compact` (Copy TOML) leaves out sub-keys whose feature is off.
+// Skin files and stored drafts keep them, so switching a feature back on
+// brings back the user's values.
+function serializeToml(skin, options) {
   var s = normalizeSkin(skin, skin ? skin.id : "custom", "user")
+  var full = !(options && options.compact)
   var lines = [
-    "# Barcraft skin. Works as ~/.config/omarchy/bar/skins/<name>.toml or as the",
-    "# [bar-skin] section of a theme's shell.toml.",
+    "# Barcraft skin. Save as ~/.config/omarchy/bar/skins/<name>.toml,",
+    "# or ship in a theme as shell.bar-skin.toml (or [bar-skin] in shell.toml).",
     "[bar-skin]",
     "name             = " + tomlString(s.name),
     s.description ? "description      = " + tomlString(s.description) : null,
     "mode             = \"" + s.mode + "\"",
     "art              = \"" + s.art + "\"",
-    "theme-tint       = " + (s.themeTint ? "true" : "false"),
+    (full || s.art !== "none") ? ("theme-tint       = " + (s.themeTint ? "true" : "false")) : null,
     "bezel            = \"" + s.bezel + "\"",
-    "bezel-strength   = " + s.bezelStrength.toFixed(2),
+    (full || s.bezel !== "none") ? ("bezel-strength   = " + s.bezelStrength.toFixed(2)) : null,
     "contrast         = " + s.contrast.toFixed(2),
     "surface-tone     = " + s.surfaceTone.toFixed(2),
     s.customBackground ? "custom-background = \"" + s.customBackground + "\"" : null,
@@ -812,16 +1242,16 @@ function serializeToml(skin) {
     s.gradientTo ? "gradient-to      = \"" + s.gradientTo + "\"" : null,
     "blur             = " + (s.blur ? "true" : "false"),
     "border           = \"" + s.border + "\"",
-    "border-alpha     = " + s.borderAlpha.toFixed(2),
-    "border-width     = " + s.borderWidth,
+    (full || s.border !== "none") ? ("border-alpha     = " + s.borderAlpha.toFixed(2)) : null,
+    (full || s.border !== "none") ? ("border-width     = " + s.borderWidth) : null,
     "shadow           = " + (s.shadow ? "true" : "false"),
-    "shadow-strength  = " + s.shadowStrength.toFixed(2),
+    (full || s.shadow) ? ("shadow-strength  = " + s.shadowStrength.toFixed(2)) : null,
     "widget-style     = \"" + s.widgetStyle + "\"",
     "",
     "# Behavior",
     "visibility       = \"" + s.visibility + "\"",
-    "hover-edge-px    = " + s.hoverEdgePx,
-    "accent-hairline  = " + (s.accentHairline ? "true" : "false"),
+    (full || s.visibility === "autohide") ? ("hover-edge-px    = " + s.hoverEdgePx) : null,
+    (full || s.visibility === "autohide") ? ("accent-hairline  = " + (s.accentHairline ? "true" : "false")) : null,
     ""
   ]
   return lines.filter(function(l) { return l !== null }).join("\n")
@@ -1092,7 +1522,7 @@ function skinToJson(skin) {
   return out
 }
 
-function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard) {
+function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard, monitorDrafts) {
   var p = normalizePrefs(prefs)
   var out = {
     standard: !!standard,
@@ -1115,7 +1545,28 @@ function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard
   }
   if (any) out.monitors = mons
   if (draft) out.draft = skinToJson(draft)
+  var mDrafts = {}
+  var anyDraft = false
+  for (var dScreen in (monitorDrafts || {})) {
+    var dName = sanitizeScreenName(dScreen)
+    var dSkin = monitorDrafts[dScreen]
+    if (!dName || !dSkin || typeof dSkin !== "object") continue
+    mDrafts[dName] = skinToJson(dSkin)
+    anyDraft = true
+  }
+  if (anyDraft) out.monitorDrafts = mDrafts
   return out
+}
+
+function parseDraftObject(rawDraft, fallbackId, lookup) {
+  if (!rawDraft || typeof rawDraft !== "object" || Array.isArray(rawDraft)) return null
+  var base = null
+  if (rawDraft.preset !== undefined && typeof lookup === "function") base = lookup(String(rawDraft.preset))
+  var merged = base ? copySkin(base) : {}
+  for (var k in rawDraft) {
+    if (hasOwn(rawDraft, k) && !isUnsafeKey(k)) merged[k] = rawDraft[k]
+  }
+  return normalizeSkin(merged, fallbackId, "custom")
 }
 
 function stateFromJson(obj, lookup) {
@@ -1126,23 +1577,24 @@ function stateFromJson(obj, lookup) {
     standard: parseBool(o.standard, false),
     prefs: normalizePrefs(o),
     monitors: {},
-    draft: null
+    draft: null,
+    monitorDrafts: {}
   }
-  var mons = o.monitors && typeof o.monitors === "object" ? o.monitors : {}
+  var mons = o.monitors && typeof o.monitors === "object" && !Array.isArray(o.monitors) ? o.monitors : {}
   for (var screen in mons) {
     var name = sanitizeScreenName(screen)
     var id = String(mons[screen] || "").trim()
     if (!name || !id) continue
     state.monitors[name] = id === "theme" ? "theme" : slugify(id)
   }
-  if (o.draft && typeof o.draft === "object" && !Array.isArray(o.draft)) {
-    var base = null
-    if (o.draft.preset !== undefined && typeof lookup === "function") base = lookup(String(o.draft.preset))
-    var merged = base ? copySkin(base) : {}
-    for (var k in o.draft) {
-      if (hasOwn(o.draft, k) && !isUnsafeKey(k)) merged[k] = o.draft[k]
-    }
-    state.draft = normalizeSkin(merged, state.activeSkinId, "custom")
+  state.draft = parseDraftObject(o.draft, state.activeSkinId, lookup)
+  var mDrafts = o.monitorDrafts && typeof o.monitorDrafts === "object" && !Array.isArray(o.monitorDrafts) ? o.monitorDrafts : {}
+  for (var dScreen in mDrafts) {
+    var dName = sanitizeScreenName(dScreen)
+    if (!dName) continue
+    var fallback = state.monitors[dName] || state.activeSkinId
+    var parsedDraft = parseDraftObject(mDrafts[dScreen], fallback, lookup)
+    if (parsedDraft) state.monitorDrafts[dName] = parsedDraft
   }
   return state
 }
@@ -1237,6 +1689,37 @@ function applyMenuBlock(text, entries) {
   return head + block.join("\n") + "\n" + body.slice(close)
 }
 
+// Strict semver parser and remote manifest version validator for explicit
+// user-initiated Barcraft update checks.
+function parseSemver(raw) {
+  var m = String(raw || "").trim().match(/^v?(\d{1,5})\.(\d{1,5})\.(\d{1,5})$/)
+  if (!m) return null
+  return [parseInt(m[1], 10), parseInt(m[2], 10), parseInt(m[3], 10)]
+}
+
+function compareSemver(a, b) {
+  var pa = parseSemver(a)
+  var pb = parseSemver(b)
+  if (!pa || !pb) return null
+  for (var i = 0; i < 3; i++) {
+    if (pa[i] !== pb[i]) return pa[i] > pb[i] ? 1 : -1
+  }
+  return 0
+}
+
+function parseRemoteManifestVersion(text, expectedId) {
+  var raw = String(text || "")
+  if (!raw || raw.length > 16384) return ""
+  var obj = null
+  try { obj = JSON.parse(raw) } catch (e) { return "" }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return ""
+  var wantId = expectedId || "thepixelgardener.barcraft"
+  if (String(obj.id || "") !== wantId) return ""
+  var parsed = parseSemver(obj.version)
+  if (!parsed) return ""
+  return parsed[0] + "." + parsed[1] + "." + parsed[2]
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     normalizeColorRef: normalizeColorRef,
@@ -1245,12 +1728,24 @@ if (typeof module !== "undefined") {
     defaultSkin: defaultSkin,
     standardSkin: standardSkin,
     parseToml: parseToml,
+    inspectToml: inspectToml,
     parseTomlSections: parseTomlSections,
     parseSkinLibrary: parseSkinLibrary,
+    parseSkinLibraryDetailed: parseSkinLibraryDetailed,
     classifySkinWatchEvent: classifySkinWatchEvent,
     copySkin: copySkin,
     serializeToml: serializeToml,
     parseFromShellValues: parseFromShellValues,
+    inspectShellValues: inspectShellValues,
+    RESERVED_SKIN_IDS: RESERVED_SKIN_IDS,
+    isReservedSkinId: isReservedSkinId,
+    WRITE_FILE_SCRIPT: WRITE_FILE_SCRIPT,
+    REMOVE_SKIN_FILES_SCRIPT: REMOVE_SKIN_FILES_SCRIPT,
+    REMOVE_IF_UNCHANGED_SCRIPT: REMOVE_IF_UNCHANGED_SCRIPT,
+    READ_FILE_SCRIPT: READ_FILE_SCRIPT,
+    parseSemver: parseSemver,
+    compareSemver: compareSemver,
+    parseRemoteManifestVersion: parseRemoteManifestVersion,
     parseStateToml: parseStateToml,
     serializeStateToml: serializeStateToml,
     normalizePrefs: normalizePrefs,

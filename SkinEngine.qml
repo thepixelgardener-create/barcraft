@@ -6,9 +6,9 @@ import qs.Commons as Commons
 import "SkinParser.js" as SkinParser
 
 // Barcraft's state: the chosen skin, saved skins, preferences, per-monitor
-// skins and the live preview. The bar owns the primary engine; the Studio
-// widget finds it by walking up to the bar strip it sits in, so an edit shows
-// on the bar at once.
+// skins and drafts, and the live preview. The bar owns the primary engine; the
+// Studio widget finds it by walking up to the bar strip it sits in, so an edit
+// shows on the bar at once.
 Item {
   id: engine
 
@@ -31,6 +31,17 @@ Item {
     var raw = String(Qt.resolvedUrl(".")).replace(/^(?:file|qs):\/\//, "").replace(/\/$/, "")
     try { return decodeURIComponent(raw) } catch (e) { return raw }
   }
+  readonly property string pluginVersion: manifest && manifest.version ? String(manifest.version) : ""
+  readonly property string pluginAuthor: manifest && manifest.author ? String(manifest.author) : "frueh"
+  readonly property string pluginLicense: manifest && manifest.license ? String(manifest.license) : "MIT"
+  readonly property string repositoryUrl: "https://github.com/thepixelgardener-create/barcraft"
+  readonly property string issuesUrl: "https://github.com/thepixelgardener-create/barcraft/issues"
+  readonly property string remoteManifestUrl: "https://raw.githubusercontent.com/thepixelgardener-create/barcraft/main/manifest.json"
+
+  // Explicit user-triggered Barcraft update check state:
+  // "idle" | "checking" | "uptodate" | "available" | "ahead" | "error"
+  property string updateState: "idle"
+  property string remoteVersion: ""
 
   property bool isPrimary: true
   // Handed in by the bar: the shell's config facade (writes shell.json),
@@ -52,14 +63,19 @@ Item {
   readonly property var classicSkins: builtinSkins.filter(function(s) { return s.category !== "wild" })
   readonly property var wildSkins: builtinSkins.filter(function(s) { return s.category === "wild" })
   property var userSkins: []
+  property var skinDiagnostics: []
   property var customSkin: SkinParser.defaultSkin()
   property bool hasCustomDraft: false
-  // One-step undo checkpoint saved before a successful clipboard paste.
-  property var pasteUndoSnapshot: null
-  readonly property bool canUndoPaste: pasteUndoSnapshot !== null
-  property var prefs: SkinParser.defaultPrefs()
   // screen name -> skin id ("theme" for the theme's skin).
   property var monitorSkins: ({})
+  // screen name -> unsaved edited/pasted skin object for that screen.
+  property var monitorDrafts: ({})
+  // One-step undo checkpoints per target ("" for main skin, or screen name).
+  property var pasteUndoSnapshots: ({})
+  readonly property bool canUndoPaste: canUndoPasteFor("")
+  // Monotonic edit token per target so an async save never clobbers newer edits.
+  property var _editTokens: ({})
+  property var prefs: SkinParser.defaultPrefs()
   property int revision: 0
   property bool stateLoaded: false
   // Set a moment after the saved state is in, so loading it never counts as
@@ -68,7 +84,7 @@ Item {
 
   // A skin shown on the bar while a card is hovered or has the keyboard
   // cursor, without committing to it. "" previews on every screen that has
-  // no skin of its own.
+  // no override of its own.
   property var previewSkin: null
   property string previewScreen: ""
   readonly property bool previewing: previewSkin !== null
@@ -79,11 +95,32 @@ Item {
 
   // Studio messages: a translation key, its %1, and whether it's an error.
   signal notice(string key, string arg, bool isError)
+  // Emitted after a saved skin rename is confirmed on disk.
+  signal skinRenamed(string oldId, string newId)
 
-  readonly property var themeSkin: {
-    var _deps = engine.userSkins
-    return SkinParser.parseFromShellValues(Commons.Color.shellValues, function(id) { return engine.findSkinById(id) })
+  SkinStore {
+    id: store
+    isPrimary: engine.isPrimary
+    configDir: engine.configDir
+    userSkinsDir: engine.userSkinsDir
+    legacySkinsDir: engine.legacySkinsDir
+    builtinSkins: engine.builtinSkins
+    onSkinsScanned: function(skins, diagnostics, renamedIds) {
+      engine.skinDiagnostics = diagnostics || []
+      engine._renamedSkinIds = renamedIds || ({})
+      if (JSON.stringify(skins) !== JSON.stringify(engine.userSkins)) {
+        engine.userSkins = skins
+        engine.revision++
+      }
+      engine._migrateRenamedIds()
+    }
   }
+
+  readonly property var themeSkinInspection: {
+    var _deps = engine.userSkins
+    return SkinParser.inspectShellValues(Commons.Color.shellValues, function(id) { return engine.findSkinById(id) })
+  }
+  readonly property var themeSkin: themeSkinInspection ? themeSkinInspection.skin : null
   readonly property bool usingThemeSkin: followTheme && themeSkin !== null && !hasCustomDraft
 
   readonly property var committedSkin: {
@@ -111,49 +148,56 @@ Item {
     vertical: engine.vertical
   }
   readonly property var look: mainLook
-
-  // The main skin, flattened for the Studio and the bar's shared bindings.
-  readonly property string mode: mainLook.mode
-  readonly property string art: mainLook.art
-  readonly property bool hasArt: mainLook.hasArt
-  readonly property bool themeTint: mainLook.themeTint
-  readonly property string bezel: mainLook.bezel
-  readonly property real bezelStrength: mainLook.bezelStrength
-  readonly property real contrast: mainLook.contrast
-  readonly property real surfaceTone: mainLook.surfaceTone
-  readonly property string customBackground: mainLook.customBackground
-  readonly property string customForeground: mainLook.customForeground
-  readonly property string customAccent: mainLook.customAccent
-  readonly property string gradientTo: mainLook.gradientTo
-  readonly property string fill: mainLook.fill
-  readonly property int skinHeight: mainLook.skinHeight
-  readonly property int edgeMargin: mainLook.edgeMargin
-  readonly property int sideMargin: mainLook.sideMargin
-  readonly property int sectionGap: mainLook.sectionGap
-  readonly property int innerPadding: mainLook.innerPadding
-  readonly property int radius: mainLook.radius
-  readonly property real iconScale: mainLook.iconScale
-  readonly property real backgroundAlpha: mainLook.backgroundAlpha
-  readonly property bool blur: mainLook.blur
-  readonly property string borderRole: mainLook.borderRole
-  readonly property real borderAlpha: mainLook.borderAlpha
-  readonly property int borderWidth: mainLook.borderWidth
-  readonly property bool shadow: mainLook.shadow
-  readonly property real shadowStrength: mainLook.shadowStrength
-  readonly property string widgetStyle: mainLook.widgetStyle
-  readonly property string visibilityMode: mainLook.visibilityMode
-  readonly property bool autoHide: mainLook.autoHide
-  readonly property int hoverEdgePx: mainLook.hoverEdgePx
-  readonly property bool accentHairline: mainLook.accentHairline
-  readonly property color resolvedAccent: mainLook.resolvedAccent
-  readonly property color surfaceColor: mainLook.surfaceColor
   readonly property color effectiveForeground: mainLook.effectiveForeground
-  readonly property var surfaceBorderSpec: mainLook.surfaceBorderSpec
   // What the Studio's blur switch shows: whether Hyprland blurs the bar now.
   readonly property bool blurActive: barGlassy
 
   function resolveColorRef(ref) {
     return mainLook.resolveRef(ref)
+  }
+
+  // ---- Target helpers & token tracking -------------------------------------
+
+  function normalizeTarget(screenName) {
+    return String(screenName || "")
+  }
+
+  function _tokenFor(screenName) {
+    var key = normalizeTarget(screenName)
+    return (_editTokens && _editTokens[key]) ? _editTokens[key] : 0
+  }
+
+  function _bumpToken(screenName) {
+    var key = normalizeTarget(screenName)
+    var next = {}
+    for (var k in _editTokens) next[k] = _editTokens[k]
+    next[key] = (next[key] || 0) + 1
+    _editTokens = next
+    return next[key]
+  }
+
+  function _setMonitorDraft(screenName, skinObj) {
+    var name = normalizeTarget(screenName)
+    if (!name) return
+    var next = {}
+    for (var k in monitorDrafts) next[k] = monitorDrafts[k]
+    if (skinObj) next[name] = skinObj
+    else delete next[name]
+    monitorDrafts = next
+  }
+
+  function _setPasteUndo(screenName, snap) {
+    var key = normalizeTarget(screenName)
+    var next = {}
+    for (var k in pasteUndoSnapshots) next[k] = pasteUndoSnapshots[k]
+    if (snap) next[key] = snap
+    else delete next[key]
+    pasteUndoSnapshots = next
+  }
+
+  function canUndoPasteFor(screenName) {
+    var key = normalizeTarget(screenName)
+    return !!(pasteUndoSnapshots && pasteUndoSnapshots[key])
   }
 
   // ---- Finding skins -------------------------------------------------------
@@ -181,26 +225,67 @@ Item {
   }
 
   function monitorSkinFor(screenName) {
-    var id = monitorSkins ? monitorSkins[String(screenName || "")] : undefined
+    var id = monitorSkins ? monitorSkins[normalizeTarget(screenName)] : undefined
     if (!id) return null
     if (id === "theme") return themeSkin
     return findSkinById(id)
   }
 
-  function hasMonitorSkin(screenName) {
-    return monitorSkinFor(screenName) !== null
+  function monitorDraftFor(screenName) {
+    var name = normalizeTarget(screenName)
+    if (!name || !monitorDrafts) return null
+    return monitorDrafts[name] || null
   }
 
-  // The skin a screen wears: its own if it has one, else the main skin, with
-  // a preview on top while one runs for that screen.
-  function skinForScreen(screenName) {
-    var name = String(screenName || "")
+  function hasMonitorSkin(screenName) {
+    return monitorDraftFor(screenName) !== null || monitorSkinFor(screenName) !== null
+  }
+
+  function hasDraftFor(screenName) {
+    var name = normalizeTarget(screenName)
+    return name ? (monitorDraftFor(name) !== null) : hasCustomDraft
+  }
+
+  // Canonical committed skin for a target ("" = Main skin, else screen name).
+  function committedSkinFor(screenName) {
+    var name = normalizeTarget(screenName)
+    if (!name) return committedSkin
+    var draft = monitorDraftFor(name)
+    if (draft) return draft
     var own = monitorSkinFor(name)
+    return own || committedSkin
+  }
+
+  // The skin a screen wears: its own draft or override if it has one, else the
+  // main skin, with a preview on top while one runs for that screen.
+  function skinForScreen(screenName) {
+    var name = normalizeTarget(screenName)
+    var own = name ? (monitorDraftFor(name) || monitorSkinFor(name)) : null
     if (previewSkin) {
       if (previewScreen === name) return previewSkin
       if (previewScreen === "" && !own) return previewSkin
     }
     return own || committedSkin
+  }
+
+  // The base saved/built-in id a target is currently assigned to (or "" if none).
+  function targetBaseId(screenName) {
+    var name = normalizeTarget(screenName)
+    if (!name) return usingThemeSkin ? "theme" : activeSkinId
+    var id = monitorSkins ? monitorSkins[name] : undefined
+    return id ? String(id) : ""
+  }
+
+  // True if another target (main skin or another monitor) is using `id`.
+  function isSkinShared(id, excludeScreen) {
+    var slug = String(id || "")
+    if (!slug) return false
+    var skip = normalizeTarget(excludeScreen)
+    if (skip !== "" && !usingThemeSkin && activeSkinId === slug) return true
+    for (var s in monitorSkins) {
+      if (s !== skip && monitorSkins[s] === slug) return true
+    }
+    return false
   }
 
   // What windows make room for, from committed skins only, so hovering a
@@ -219,7 +304,7 @@ Item {
 
   function zoneFor(screenName) {
     if (standard) return { standard: true, sizePx: barSizePxOf(null), edgePx: 0, autoHide: false }
-    var own = monitorSkinFor(screenName) || committedSkin
+    var own = committedSkinFor(screenName)
     return {
       standard: false,
       sizePx: barSizePxOf(own),
@@ -228,11 +313,13 @@ Item {
     }
   }
 
-  // The id the Studio marks as chosen for a screen ("" = the main skin).
+  // The id the Studio marks as chosen for a target ("" = draft or inheriting main).
   function chosenIdFor(screenName) {
-    if (standard) return "standard"
-    if (screenName) {
-      var id = monitorSkins ? monitorSkins[screenName] : undefined
+    var name = normalizeTarget(screenName)
+    if (standard) return name ? "" : "standard"
+    if (name) {
+      if (monitorDraftFor(name)) return ""
+      var id = monitorSkins ? monitorSkins[name] : undefined
       return id ? String(id) : ""
     }
     if (usingThemeSkin) return "theme"
@@ -244,7 +331,7 @@ Item {
   function previewById(id, screenName) {
     var s = id === "theme" ? themeSkin : (id === "standard" ? SkinParser.standardSkin() : findSkinById(id))
     if (!s) return
-    previewScreen = String(screenName || "")
+    previewScreen = normalizeTarget(screenName)
     previewSkin = s
   }
 
@@ -253,13 +340,18 @@ Item {
     previewScreen = ""
   }
 
-  function clearPasteUndo() {
-    if (pasteUndoSnapshot !== null) pasteUndoSnapshot = null
+  function clearPasteUndo(screenName) {
+    if (screenName === undefined) {
+      if (Object.keys(pasteUndoSnapshots || {}).length > 0) pasteUndoSnapshots = ({})
+      return
+    }
+    _setPasteUndo(screenName, null)
   }
 
   function setStandard(enabled) {
     clearPreview()
     clearPasteUndo()
+    _bumpToken("")
     standard = !!enabled
     revision++
     persistState()
@@ -277,7 +369,8 @@ Item {
     var found = findSkinById(id)
     if (!found) return false
     clearPreview()
-    clearPasteUndo()
+    clearPasteUndo("")
+    _bumpToken("")
     standard = false
     activeSkinId = found.id
     hasCustomDraft = false
@@ -290,7 +383,7 @@ Item {
 
   // Gives one screen its own skin; "" hands it back to the main skin.
   function selectForScreen(screenName, id) {
-    var name = String(screenName || "")
+    var name = normalizeTarget(screenName)
     if (!name) {
       selectSkin(id)
       return
@@ -300,6 +393,9 @@ Item {
     if (!id) delete next[name]
     else next[name] = id === "theme" ? "theme" : String(id)
     clearPreview()
+    clearPasteUndo(name)
+    _bumpToken(name)
+    _setMonitorDraft(name, null)
     if (id) standard = false
     monitorSkins = next
     revision++
@@ -308,7 +404,8 @@ Item {
 
   function setFollowTheme(enabled) {
     clearPreview()
-    clearPasteUndo()
+    clearPasteUndo("")
+    _bumpToken("")
     followTheme = !!enabled
     if (followTheme && themeSkin) standard = false
     if (followTheme && themeSkin) hasCustomDraft = false
@@ -332,9 +429,11 @@ Item {
   }
 
   // What the bar wears now, for the widget's tooltip and the IPC.
-  function currentName() {
-    if (standardActive) return strings.t("label.standard")
-    return activeSkin ? activeSkin.name : ""
+  function currentName(screenName) {
+    var name = normalizeTarget(screenName)
+    if (standardFor(name)) return strings.t("label.standard")
+    var s = name ? committedSkinFor(name) : activeSkin
+    return s ? s.name : ""
   }
 
   // The id the menu's checkmarks compare against.
@@ -355,10 +454,11 @@ Item {
 
   // ---- Editing -------------------------------------------------------------
 
-  function updateField(key, value) {
+  function updateField(key, value, screenName) {
+    var target = normalizeTarget(screenName)
     clearPreview()
     standard = false
-    var base = committedSkin
+    var base = committedSkinFor(target)
     var next = SkinParser.normalizeSkin(base, base.id, base.source)
     next[key] = value
     if (key === "mode") {
@@ -372,22 +472,35 @@ Item {
         if (next.radius === 0) next.radius = 12
       }
     }
-    customSkin = SkinParser.normalizeSkin(next, next.id, "custom")
-    hasCustomDraft = true
+    var normalized = SkinParser.normalizeSkin(next, next.id, "custom")
+    _bumpToken(target)
+    if (target) {
+      _setMonitorDraft(target, normalized)
+    } else {
+      customSkin = normalized
+      hasCustomDraft = true
+    }
     revision++
     persistDebounce.restart()
   }
 
-  function toggleAutoHide() {
-    updateField("visibility", committedSkin.visibility === "autohide" ? "always" : "autohide")
+  function toggleAutoHide(screenName) {
+    var target = normalizeTarget(screenName)
+    var base = committedSkinFor(target)
+    updateField("visibility", base.visibility === "autohide" ? "always" : "autohide", target)
   }
 
   // Blur is Omarchy's Glassy bar: omarchy-bar installs the Hyprland layer
-  // rule. The skin remembers the wish; this keeps the bar in step with it.
+  // rule globally, so toggling blur updates the shared (main) skin.
   function setBlur(enabled) {
     var want = !!enabled
-    if (!!committedSkin.blur !== want) updateField("blur", want)
+    if (!!committedSkin.blur !== want) updateField("blur", want, "")
     Qt.callLater(engine.syncBlur)
+  }
+
+  // Icon scale writes global [bar] tokens in ~/.config/omarchy/shell.toml.
+  function setSharedIconScale(scale) {
+    updateField("iconScale", scale, "")
   }
 
   // Standard leaves blur to Omarchy's own background setting.
@@ -413,9 +526,17 @@ Item {
     else if (key === "updateCheck") Qt.callLater(engine.syncUpdateHook)
   }
 
-  function resetToPreset() {
+  function resetTarget(screenName) {
+    var target = normalizeTarget(screenName)
     clearPreview()
-    clearPasteUndo()
+    clearPasteUndo(target)
+    _bumpToken(target)
+    if (target) {
+      _setMonitorDraft(target, null)
+      revision++
+      persistState()
+      return
+    }
     standard = false
     hasCustomDraft = false
     var found = findSkinById(activeSkinId)
@@ -424,15 +545,18 @@ Item {
     persistState()
   }
 
+  function resetToPreset() {
+    resetTarget("")
+  }
+
   // ---- Saved skins ---------------------------------------------------------
 
   function builtinIdTaken(slug) {
-    for (var i = 0; i < builtinSkins.length; i++) if (builtinSkins[i].id === slug) return true
-    return slug === "theme" || slug === "theme-skin" || SkinParser.canonicalSkinId(slug) !== slug
+    return SkinParser.isReservedSkinId(slug, builtinSkins)
   }
 
-  // A file name for a skin: never a built-in's id, and when `unique`, not
-  // another saved skin's either.
+  // A file name for a skin: never a built-in or reserved id, and when `unique`,
+  // not another saved skin's either.
   function slugForName(name, ownId, unique) {
     var slug = SkinParser.slugify(name)
     if (builtinIdTaken(slug)) slug = (slug + "-custom").slice(0, 40)
@@ -466,38 +590,67 @@ Item {
     userSkins = updated
   }
 
-  function saveUserSkin(rawName, forceOverwrite) {
+  function saveUserSkin(rawName, forceOverwrite, screenName) {
+    var targetScreen = normalizeTarget(screenName)
+    var sourceSkin = committedSkinFor(targetScreen)
     var cleanName = SkinParser.sanitizeLabel(rawName, 40)
-    if (!cleanName) cleanName = committedSkin.name || "Custom"
-    var target = SkinParser.resolveSaveTarget(cleanName, userSkins, activeSkinId, builtinIdTaken, !!forceOverwrite)
+    if (!cleanName) cleanName = sourceSkin.name || "Custom"
+    // Only allow silent in-place overwrite when this target exclusively owns
+    // the base skin; if another monitor shares it, prompt for confirmation.
+    var baseId = targetBaseId(targetScreen)
+    var inPlaceId = (baseId && !isSkinShared(baseId, targetScreen)) ? baseId : ""
+    var target = SkinParser.resolveSaveTarget(cleanName, userSkins, inPlaceId, builtinIdTaken, !!forceOverwrite)
     if (target.needsConfirm) {
       return { ok: false, needsConfirm: true, slug: target.slug, conflictName: target.conflictName }
     }
     var slug = target.slug
-    var dest = skinPath(slug)
-    var toSave = SkinParser.normalizeSkin(committedSkin, slug, "user")
+    var existing = target.overwrite ? findSkinById(slug) : null
+    var dest = (existing && existing.path && SkinParser.isSafeSkinPath(existing.path, [userSkinsDir])) ? existing.path : skinPath(slug)
+    var toSave = SkinParser.normalizeSkin(sourceSkin, slug, "user")
     toSave.id = slug
     toSave.name = cleanName
     toSave.source = "user"
     toSave.path = dest
+    var capturedToken = _tokenFor(targetScreen)
+    var expectHash = (target.overwrite && !forceOverwrite) ? store.hashForPath(dest) : ""
 
-    writeFile(dest, SkinParser.serializeToml(toSave), function(ok, code) {
+    store.writeFile(dest, SkinParser.serializeToml(toSave), function(ok, code) {
       if (!ok) {
-        engine.notice(code === 2 ? "status.saveExists" : "status.saveFailed", slug, true)
+        if (code === 3) {
+          store.rescan()
+          engine.notice("status.saveChangedExternally", cleanName, true)
+        } else {
+          engine.notice(code === 2 ? "status.saveExists" : "status.saveFailed", slug, true)
+        }
         return
       }
       engine.replaceUserSkin(slug, toSave)
+      // Only clear the target's draft and bind the new skin if the user hasn't
+      // edited or switched that target while the write was in flight.
+      if (engine._tokenFor(targetScreen) !== capturedToken) {
+        engine.revision++
+        engine.notice("status.savedKeptDraft", slug, false)
+        return
+      }
       engine.clearPreview()
-      engine.clearPasteUndo()
+      engine.clearPasteUndo(targetScreen)
       engine.standard = false
-      engine.activeSkinId = slug
-      engine.hasCustomDraft = false
-      engine.customSkin = toSave
-      if (engine.themeSkin) engine.followTheme = false
+      if (targetScreen) {
+        var mons = {}
+        for (var k in engine.monitorSkins) mons[k] = engine.monitorSkins[k]
+        mons[targetScreen] = slug
+        engine.monitorSkins = mons
+        engine._setMonitorDraft(targetScreen, null)
+      } else {
+        engine.activeSkinId = slug
+        engine.hasCustomDraft = false
+        engine.customSkin = toSave
+        if (engine.themeSkin) engine.followTheme = false
+      }
       engine.revision++
       engine.persistState()
       engine.notice("status.saved", slug, false)
-    }, { noClobber: !target.overwrite })
+    }, { noClobber: !target.overwrite, expect: expectHash })
     return { ok: true, needsConfirm: false, slug: slug, conflictName: "" }
   }
 
@@ -505,7 +658,7 @@ Item {
     var skin = null
     for (var i = 0; i < userSkins.length; i++) if (userSkins[i].id === id) skin = userSkins[i]
     var cleanName = SkinParser.sanitizeLabel(rawName, 40)
-    if (!skin || !cleanName || cleanName === skin.name) return id
+    if (!skin || !cleanName || cleanName === skin.name) return ""
     clearPreview()
     var slug = slugForName(cleanName, id, true)
     var oldPath = skin.path || skinPath(id)
@@ -517,11 +670,16 @@ Item {
     var sameFile = oldPath === renamed.path
     var removeOld = (!sameFile && SkinParser.isSafeSkinPath(oldPath, [engine.userSkinsDir, engine.legacySkinsDir])) ? oldPath : ""
 
-    // Write and byte-verify the replacement file on disk before unlinking the
-    // original or committing the new id to state.
-    writeFile(renamed.path, SkinParser.serializeToml(renamed), function(ok, code) {
+    // Write and byte-verify the replacement file on disk and confirm oldPath
+    // removal before updating Studio state.
+    store.writeFile(renamed.path, SkinParser.serializeToml(renamed), function(ok, code) {
       if (!ok) {
-        engine.notice(code === 2 ? "status.saveExists" : "status.saveFailed", slug, true)
+        if (code === 4) {
+          store.rescan()
+          engine.notice("status.renamePartial", cleanName, true)
+        } else {
+          engine.notice(code === 2 ? "status.saveExists" : "status.saveFailed", slug, true)
+        }
         return
       }
       engine.replaceUserSkin(id, renamed)
@@ -536,91 +694,160 @@ Item {
       engine.monitorSkins = mons
       engine.revision++
       engine.persistState()
+      engine.skinRenamed(id, slug)
       engine.notice("status.renamed", cleanName, false)
+      if (removeOld) store.removeLegacySibling(removeOld)
     }, { noClobber: !sameFile, removeAfter: removeOld })
     return slug
   }
 
   function deleteUserSkin(id) {
     var victim = null
-    var kept = []
     for (var i = 0; i < userSkins.length; i++) {
       if (userSkins[i].id === id) victim = userSkins[i]
-      else kept.push(userSkins[i])
     }
     if (!victim) return
     clearPreview()
     var victimPath = victim.path || skinPath(id)
-    if (SkinParser.isSafeSkinPath(victimPath, [userSkinsDir, legacySkinsDir])) {
-      runCommand(["rm", "-f", "--", victimPath])
-    }
-    // The bar doesn't change under you: a deleted skin that's on stays on as
-    // an unsaved draft until something else is picked.
-    if (activeSkinId === id && !hasCustomDraft && !usingThemeSkin) {
-      customSkin = SkinParser.normalizeSkin(victim, id, "custom")
-      hasCustomDraft = true
-    }
-    userSkins = kept
-    var mons = {}
-    for (var screen in monitorSkins) if (monitorSkins[screen] !== id) mons[screen] = monitorSkins[screen]
-    monitorSkins = mons
-    revision++
-    persistState()
-    notice("status.deleted", victim.name, false)
+
+    // Only remove from state and report success after confirmed file removal.
+    store.removeSkinFiles([victimPath], function(ok) {
+      if (!ok) {
+        store.rescan()
+        engine.notice("status.deleteFailed", victim.name, true)
+        return
+      }
+      var kept = []
+      for (var j = 0; j < engine.userSkins.length; j++) {
+        if (engine.userSkins[j].id !== id) kept.push(engine.userSkins[j])
+      }
+      // The bar doesn't change under you: a deleted skin that's on stays on as
+      // an unsaved draft until something else is picked.
+      if (engine.activeSkinId === id && !engine.hasCustomDraft && !engine.usingThemeSkin) {
+        engine.customSkin = SkinParser.normalizeSkin(victim, id, "custom")
+        engine.hasCustomDraft = true
+      }
+      engine.userSkins = kept
+      var mons = {}
+      for (var screen in engine.monitorSkins) {
+        if (engine.monitorSkins[screen] !== id) mons[screen] = engine.monitorSkins[screen]
+      }
+      engine.monitorSkins = mons
+      engine.revision++
+      engine.persistState()
+      engine.notice("status.deleted", victim.name, false)
+      store.removeLegacySibling(victimPath)
+    })
   }
 
   // ---- Clipboard -----------------------------------------------------------
 
+  function exportToml(screenName) {
+    return SkinParser.serializeToml(committedSkinFor(screenName), { compact: true })
+  }
+
   function exportActiveToml() {
-    return SkinParser.serializeToml(committedSkin)
+    return exportToml("")
   }
 
   // The TOML goes to wl-copy over stdin, never as an argument.
-  function copyActiveToml() {
-    runJob(["wl-copy"], exportActiveToml(), function(code) {
+  function copyToml(screenName) {
+    store.runJob(["wl-copy"], exportToml(screenName), function(code) {
       if (code === 0) engine.notice("status.copied", "", false)
       else engine.notice("status.copyFailed", "", true)
     })
   }
 
-  function importFromClipboard() {
+  function copyActiveToml() {
+    copyToml("")
+  }
+
+  property string _pasteTarget: ""
+
+  function importFromClipboard(screenName) {
     if (pasteProc.running) return
+    _pasteTarget = normalizeTarget(screenName)
     pasteProc.running = true
   }
 
-  function importText(text) {
+  function importText(text, screenName) {
+    var target = normalizeTarget(screenName)
     var raw = String(text || "")
     if (raw.length > 32768) {
       notice("status.importTooLarge", "", true)
-      return
+      return false
     }
-    var skin = SkinParser.parseToml(raw, "imported", "custom", function(id) { return engine.findSkinById(id) })
-    if (!skin) {
-      notice("status.importFailed", "", true)
-      return
+    var res = SkinParser.inspectToml(raw, "imported", "custom", function(id) { return engine.findSkinById(id) })
+    if (!res.skin || res.appliedCount === 0) {
+      if (res.errors && res.errors.length > 0) {
+        notice("status.importError", res.errors[0].message, true)
+      } else {
+        notice("status.importFailed", "", true)
+      }
+      return false
     }
-    var prevSkin = committedSkin
-    pasteUndoSnapshot = {
-      activeSkinId: activeSkinId,
-      followTheme: followTheme,
-      standard: standard,
-      hasCustomDraft: hasCustomDraft,
-      customSkin: prevSkin ? SkinParser.normalizeSkin(prevSkin, prevSkin.id, prevSkin.source) : null
+    var skin = res.skin
+    if (target) {
+      var prevDraft = monitorDraftFor(target)
+      _setPasteUndo(target, {
+        screen: target,
+        monitorSkinId: monitorSkins && monitorSkins[target] ? monitorSkins[target] : "",
+        hadDraft: prevDraft !== null,
+        draftSkin: prevDraft ? SkinParser.normalizeSkin(prevDraft, prevDraft.id, prevDraft.source) : null,
+        standard: standard
+      })
+      clearPreview()
+      _bumpToken(target)
+      standard = false
+      _setMonitorDraft(target, skin)
+    } else {
+      var prevSkin = committedSkin
+      _setPasteUndo("", {
+        screen: "",
+        activeSkinId: activeSkinId,
+        followTheme: followTheme,
+        standard: standard,
+        hasCustomDraft: hasCustomDraft,
+        customSkin: prevSkin ? SkinParser.normalizeSkin(prevSkin, prevSkin.id, prevSkin.source) : null
+      })
+      clearPreview()
+      _bumpToken("")
+      standard = false
+      customSkin = skin
+      hasCustomDraft = true
     }
-    clearPreview()
-    standard = false
-    customSkin = skin
-    hasCustomDraft = true
     revision++
     persistState()
-    notice("status.imported", skin.name, false)
+    var firstNote = ""
+    if (res.errors && res.errors.length > 0) firstNote = res.errors[0].message
+    else if (res.adjustments && res.adjustments.length > 0) firstNote = res.adjustments[0].message
+    if (firstNote) notice("status.importedAdjusted", skin.name + " (" + firstNote + ")", false)
+    else notice("status.imported", skin.name, false)
+    return true
   }
 
-  function undoPaste() {
-    var snap = pasteUndoSnapshot
+  function undoPaste(screenName) {
+    var target = normalizeTarget(screenName)
+    var snap = pasteUndoSnapshots ? pasteUndoSnapshots[target] : null
     if (!snap) return false
-    pasteUndoSnapshot = null
+    _setPasteUndo(target, null)
     clearPreview()
+    _bumpToken(target)
+    if (target) {
+      standard = !!snap.standard
+      var mons = {}
+      for (var k in monitorSkins) mons[k] = monitorSkins[k]
+      if (snap.monitorSkinId) mons[target] = snap.monitorSkinId
+      else delete mons[target]
+      monitorSkins = mons
+      _setMonitorDraft(target, snap.hadDraft && snap.draftSkin
+        ? SkinParser.normalizeSkin(snap.draftSkin, snap.draftSkin.id, "custom")
+        : null)
+      revision++
+      persistState()
+      notice("status.pasteUndone", currentName(target), false)
+      return true
+    }
     activeSkinId = snap.activeSkinId
     followTheme = snap.followTheme
     standard = snap.standard
@@ -631,17 +858,11 @@ Item {
     }
     revision++
     persistState()
-    notice("status.pasteUndone", currentName(), false)
+    notice("status.pasteUndone", currentName(""), false)
     return true
   }
 
   // ---- Settings: shell.json `bar.barcraft` ---------------------------------
-  //
-  // Omarchy keeps feature settings in shell.json subtrees (bar:, dock:, idle:)
-  // and the host writes the file; the bar is handed the `bar:` subtree as
-  // barConfig. Barcraft's state is `bar.barcraft` beside position, background
-  // and layout, so it moves with the rest of the Omarchy config, `omarchy bar
-  // reset` resets it too, and jq reads it.
 
   readonly property var configBlock: barConfig && typeof barConfig === "object"
     && barConfig.barcraft && typeof barConfig.barcraft === "object" ? barConfig.barcraft : null
@@ -651,7 +872,9 @@ Item {
   onConfigBlockChanged: if (stateLoaded) Qt.callLater(engine.applyConfigBlock)
 
   function stateJson() {
-    return JSON.stringify(SkinParser.stateToJson(activeSkinId, followTheme, hasCustomDraft ? customSkin : null, prefs, monitorSkins, standard))
+    return JSON.stringify(SkinParser.stateToJson(
+      activeSkinId, followTheme, hasCustomDraft ? customSkin : null,
+      prefs, monitorSkins, standard, monitorDrafts))
   }
 
   function persistState() {
@@ -666,13 +889,44 @@ Item {
     })
   }
 
+  // 0.6 could save a skin as draft.toml or standard.toml. Those ids are
+  // reserved now, so the files load as "draft-saved" / "standard-saved", and
+  // a stored choice of the old id moves over instead of losing the look.
+  property var _renamedSkinIds: ({})
+  function _migrateRenamedIds() {
+    var map = _renamedSkinIds || {}
+    if (!stateLoaded) return
+    function moved(id) {
+      var key = String(id || "")
+      if (key !== "draft" && key !== "standard") return ""
+      return Object.prototype.hasOwnProperty.call(map, key) ? String(map[key]) : ""
+    }
+    var changed = false
+    var nextActive = moved(activeSkinId)
+    if (nextActive) {
+      activeSkinId = nextActive
+      changed = true
+    }
+    var mons = {}
+    for (var screen in monitorSkins) {
+      var to = moved(monitorSkins[screen])
+      mons[screen] = to || monitorSkins[screen]
+      if (to) changed = true
+    }
+    if (!changed) return
+    monitorSkins = mons
+    revision++
+    persistState()
+  }
+
   function applyState(st) {
     clearPasteUndo()
     activeSkinId = st.activeSkinId
     followTheme = st.followTheme
     standard = !!st.standard
     prefs = st.prefs
-    monitorSkins = st.monitors
+    monitorSkins = st.monitors || ({})
+    monitorDrafts = st.monitorDrafts || ({})
     if (st.draft) {
       customSkin = st.draft
       hasCustomDraft = true
@@ -686,7 +940,8 @@ Item {
     var block = configBlock
     if (!block) return
     var st = SkinParser.stateFromJson(block, function(id) { return engine.findSkinById(id) })
-    var json = JSON.stringify(SkinParser.stateToJson(st.activeSkinId, st.followTheme, st.draft, st.prefs, st.monitors, st.standard))
+    var json = JSON.stringify(SkinParser.stateToJson(
+      st.activeSkinId, st.followTheme, st.draft, st.prefs, st.monitors, st.standard, st.monitorDrafts))
     if (json === _lastConfigJson) return
     _lastConfigJson = json
     applyState(st)
@@ -715,6 +970,7 @@ Item {
       }
     }
     stateLoaded = true
+    _migrateRenamedIds()
     settleTimer.restart()
   }
 
@@ -727,8 +983,6 @@ Item {
     onLoaded: loaded = true
   }
 
-  // The host hands barConfig in right after the bar is built; give it and
-  // the legacy file a moment, then settle on whichever holds the state.
   Timer {
     id: loadTimer
     interval: 400
@@ -736,238 +990,7 @@ Item {
     onTriggered: engine.loadState()
   }
 
-  // One short shell job with its own watchdog. `input`, when set, goes in over
-  // stdin and never onto the command line: other accounts can read command
-  // lines, and Quickshell logs a command that fails to start.
-  Component {
-    id: pipeJob
-    Item {
-      id: job
-      visible: false
-      property var command: []
-      property var input: null
-      property var callback: null
-      property bool finished: false
-      function start() {
-        proc.running = true
-        watchdog.start()
-      }
-      function finish(code) {
-        if (finished) return
-        finished = true
-        watchdog.stop()
-        if (callback) callback(code)
-        destroy()
-      }
-      Timer {
-        id: watchdog
-        interval: 8000
-        repeat: false
-        onTriggered: {
-          proc.running = false
-          job.finish(-1)
-        }
-      }
-      Process {
-        id: proc
-        command: job.command
-        stdinEnabled: job.input !== null
-        onStarted: {
-          if (job.input === null) return
-          write(String(job.input))
-          stdinEnabled = false
-        }
-        onExited: function(code, status) { job.finish(code) }
-      }
-    }
-  }
-
-  // done(code): the job's exit code, or -1 when it could not run in time.
-  function runJob(argv, input, done) {
-    var job = pipeJob.createObject(engine, {
-      command: argv,
-      input: input === undefined ? null : input,
-      callback: done || null
-    })
-    if (!job) {
-      if (done) done(-1)
-      return
-    }
-    job.start()
-  }
-
-  // Atomic write that never trusts FileView's `saved` signal. The content goes
-  // in over stdin, lands in a temp file beside the target, and must match its
-  // MD5 before it replaces the target: by rename, or by hard link when the
-  // target may not exist yet. The target keeps its permissions. With
-  // `expect`, the target is replaced only while it still has that MD5
-  // ("missing": only while it still doesn't exist), checked right before the
-  // rename, so a save another program made after Barcraft read the file is
-  // never thrown away. Codes for done(ok, code): 0 written, 1 failed,
-  // 2 target exists (noClobber), 3 target changed since it was read (expect).
-  function writeFile(filePath, content, done, options) {
-    var opts = options || {}
-    var text = String(content === undefined || content === null ? "" : content)
-    var script =
-      "dest=$1; want=$2; noclobber=$3; mkexec=$4; old=$5; expect=$6; " +
-      "md5() { md5sum | cut -d' ' -f1; }; " +
-      "[ -n \"$dest\" ] && [ ! -L \"$dest\" ] || exit 1; " +
-      "if [ \"$noclobber\" = 1 ] && [ -e \"$dest\" ]; then exit 2; fi; " +
-      "dir=$(dirname -- \"$dest\"); " +
-      "mkdir -p -- \"$dir\" || exit 1; " +
-      "tmp=$(mktemp \"$dir/.barcraft.XXXXXX\") || exit 1; " +
-      "trap 'rm -f -- \"$tmp\"' EXIT; " +
-      "cat > \"$tmp\" || exit 1; " +
-      "[ \"$(md5 < \"$tmp\")\" = \"$want\" ] || exit 1; " +
-      "if [ -f \"$dest\" ]; then chmod --reference=\"$dest\" -- \"$tmp\" || exit 1; " +
-      "else m=$(umask); chmod \"$(printf '%o' $(( 0666 & ~m )))\" -- \"$tmp\" || exit 1; fi; " +
-      "if [ \"$mkexec\" = 1 ]; then chmod 0755 -- \"$tmp\" || exit 1; fi; " +
-      "if [ \"$expect\" = missing ]; then ln -- \"$tmp\" \"$dest\" 2>/dev/null || exit 3; " +
-      "elif [ \"$noclobber\" = 1 ]; then ln -- \"$tmp\" \"$dest\" 2>/dev/null || exit 2; " +
-      "else " +
-      "  if [ -n \"$expect\" ]; then " +
-      "    [ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$expect\" ] || exit 3; " +
-      "  fi; " +
-      "  mv -f -- \"$tmp\" \"$dest\" || exit 1; " +
-      "fi; " +
-      "rm -f -- \"$tmp\"; trap - EXIT; " +
-      "[ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$want\" ] || exit 1; " +
-      "if [ -n \"$old\" ] && [ \"$old\" != \"$dest\" ] && [ ! -L \"$old\" ] && [ -f \"$old\" ]; then " +
-      "  rm -f -- \"$old\" || true; " +
-      "fi"
-    runJob(["sh", "-c", script, "sh", String(filePath || ""), Qt.md5(text),
-            opts.noClobber ? "1" : "0", opts.chmodExec ? "1" : "0",
-            String(opts.removeAfter || ""), String(opts.expect || "")],
-      text,
-      function(code) {
-        if (code !== 0 && code !== 3) console.warn("Barcraft: could not write " + filePath + " (code " + code + ")")
-        if (done) done(code === 0, code)
-      })
-  }
-
-  // Removes a regular file only while it still has the MD5 Barcraft checked.
-  function removeFileIfUnchanged(filePath, expect, done) {
-    var script =
-      "p=$1; h=$2; " +
-      "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ \"$(md5sum < \"$p\" | cut -d' ' -f1)\" = \"$h\" ] || exit 3; " +
-      "rm -f -- \"$p\""
-    runJob(["sh", "-c", script, "sh", String(filePath || ""), String(expect || "")], null, function(code) {
-      if (done) done(code === 0, code)
-    })
-  }
-
-  // Read-modify-write for a file other programs edit too. Reads it fresh,
-  // lets `change(current, missing)` return the new text (or null to leave it),
-  // and writes only if nobody saved the file in between; otherwise it starts
-  // over, at most three times. done(ok)
-  function editSharedFile(filePath, change, done, attempt) {
-    var tries = attempt || 0
-    readTextFile(filePath, function(status, text) {
-      if (status === "error") {
-        if (done) done(false)
-        return
-      }
-      var missing = status === "missing"
-      var current = missing ? "" : text
-      var next = change(current, missing)
-      if (next === null || next === undefined || next === current) {
-        if (done) done(true)
-        return
-      }
-      engine.writeFile(filePath, next, function(ok, code) {
-        if (code === 3 && tries < 2) {
-          engine.editSharedFile(filePath, change, done, tries + 1)
-          return
-        }
-        if (code === 3) console.warn("Barcraft: " + filePath + " kept changing while Barcraft updated it; left it as it is")
-        if (done) done(ok)
-      }, { expect: missing ? "missing" : Qt.md5(current) })
-    })
-  }
-
-  // Fresh, uncached read of a regular non-symlink file from disk.
-  // Calls done(status, text) with status "ok" | "missing" | "error".
-  Component {
-    id: freshReadProc
-    Item {
-      id: reader
-      visible: false
-      property var command: []
-      property var callback: null
-      property bool finished: false
-      property string captured: ""
-      property bool streamDone: false
-      property bool procExited: false
-      property int exitCode: -1
-
-      function start() {
-        proc.running = true
-        watchdog.start()
-      }
-
-      function maybeFinish() {
-        if (finished || !streamDone || !procExited) return
-        finished = true
-        watchdog.stop()
-        var st = exitCode === 0 ? "ok" : (exitCode === 3 ? "missing" : "error")
-        if (callback) callback(st, st === "ok" ? captured : "")
-        destroy()
-      }
-
-      Timer {
-        id: watchdog
-        interval: 8000
-        repeat: false
-        onTriggered: {
-          if (reader.finished) return
-          reader.finished = true
-          proc.running = false
-          if (reader.callback) reader.callback("error", "")
-          reader.destroy()
-        }
-      }
-
-      Process {
-        id: proc
-        command: reader.command
-        stdout: StdioCollector {
-          waitForEnd: true
-          onStreamFinished: {
-            reader.captured = text
-            reader.streamDone = true
-            reader.maybeFinish()
-          }
-        }
-        onExited: function(code, status) {
-          reader.exitCode = code
-          reader.procExited = true
-          reader.maybeFinish()
-        }
-      }
-    }
-  }
-
-  function readTextFile(filePath, done) {
-    var script =
-      "p=$1; " +
-      "[ -n \"$p\" ] || exit 4; " +
-      "if [ ! -e \"$p\" ] && [ ! -L \"$p\" ]; then exit 3; fi; " +
-      "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ -r \"$p\" ] || exit 4; " +
-      "cat -- \"$p\""
-    var job = freshReadProc.createObject(engine, {
-      command: ["sh", "-c", script, "sh", String(filePath || "")],
-      callback: done
-    })
-    if (!job) {
-      if (done) done("error", "")
-      return
-    }
-    job.start()
-  }
-
   // Commands run one after another, never cancelling the one before.
-  // Queue depth and runtime are bounded so a stalled external command cannot
-  // grow the queue without limit or wedge later bar/OSD operations.
   property var _commandQueue: []
 
   function runCommand(argv) {
@@ -1005,103 +1028,8 @@ Item {
     }
   }
 
-  property bool _scanAgain: false
-
   function rescanUserSkins() {
-    if (scanProc.running) {
-      _scanAgain = true
-      return
-    }
-    _scanAgain = false
-    scanProc.running = true
-  }
-
-  // Live watch on the user and legacy skin directories (plus their parents so
-  // creating ~/.config/omarchy/bar/skins for the first time starts watching it).
-  property real _skinWatchStartedAt: 0
-  property int _skinWatchQuickExits: 0
-  property bool _skinWatchRewatch: false
-  property bool _skinWatchDisabled: false
-
-  function startSkinWatcher() {
-    if (!isPrimary || _skinWatchDisabled || skinWatcher.running) return
-    _skinWatchRewatch = false
-    skinWatcher.running = true
-  }
-
-  function requestSkinRewatch() {
-    if (!isPrimary || _skinWatchDisabled) return
-    skinRescanDebounce.restart()
-    _skinWatchRewatch = true
-    if (skinWatcher.running) {
-      skinWatcher.running = false
-    } else {
-      skinWatchRestart.interval = 100
-      skinWatchRestart.restart()
-    }
-  }
-
-  Timer {
-    id: skinRescanDebounce
-    interval: 150
-    repeat: false
-    onTriggered: engine.rescanUserSkins()
-  }
-
-  Timer {
-    id: skinWatchRestart
-    interval: 1000
-    repeat: false
-    onTriggered: engine.startSkinWatcher()
-  }
-
-  Timer {
-    id: skinWatchRecovered
-    interval: 1000
-    repeat: false
-    onTriggered: {
-      engine._skinWatchQuickExits = 0
-      engine.rescanUserSkins()
-    }
-  }
-
-  Process {
-    id: skinWatcher
-    command: ["bash", "-c",
-      "command -v inotifywait >/dev/null 2>&1 || exit 127; " +
-      "dirs=(); for d in \"$1\" \"$2\" \"$3\" \"$4\"; do [ -n \"$d\" ] && [ -d \"$d\" ] && dirs+=(\"$d\"); done; " +
-      "[ \"${#dirs[@]}\" -gt 0 ] || exit 1; " +
-      "exec inotifywait -m -q -e close_write,create,delete,delete_self,move,move_self --format '%w|%e|%f' \"${dirs[@]}\"",
-      "barcraft-skins-watch", engine.userSkinsDir, engine.legacySkinsDir, engine.configDir + "/bar", engine.configDir]
-    onRunningChanged: {
-      if (!running) return
-      engine._skinWatchStartedAt = Date.now()
-      if (engine._skinWatchQuickExits > 0) skinWatchRecovered.restart()
-    }
-    stdout: SplitParser {
-      onRead: function(line) {
-        var action = SkinParser.classifySkinWatchEvent(line, engine.userSkinsDir, engine.legacySkinsDir, engine.configDir)
-        if (action === "rewatch") engine.requestSkinRewatch()
-        else if (action === "rescan") skinRescanDebounce.restart()
-      }
-    }
-    onExited: function(code, status) {
-      skinWatchRecovered.stop()
-      if (!engine.isPrimary) return
-      if (code === 127) {
-        engine._skinWatchDisabled = true
-        return
-      }
-      if (engine._skinWatchRewatch) {
-        engine._skinWatchRewatch = false
-        skinWatchRestart.interval = 100
-        skinWatchRestart.restart()
-        return
-      }
-      engine._skinWatchQuickExits = Date.now() - engine._skinWatchStartedAt < 1000 ? engine._skinWatchQuickExits + 1 : 0
-      skinWatchRestart.interval = Math.min(60000, 1000 * Math.pow(2, Math.max(0, engine._skinWatchQuickExits - 4)))
-      skinWatchRestart.restart()
-    }
+    store.rescan()
   }
 
   Timer {
@@ -1147,9 +1075,6 @@ Item {
     directory: Qt.resolvedUrl("i18n")
   }
 
-  // Appearance → Menu Bar → Barcraft in Omarchy's menu, written into the
-  // user's menu extensions between Barcraft's markers. Checkmarks ask the
-  // running bar (`omarchy-shell barcraft current`), so they stay true.
   function menuEntries() {
     var parent = "appearance.top-bar.barcraft"
     var pill = "󰍜"
@@ -1172,16 +1097,10 @@ Item {
     return "'" + String(text).replace(/\0/g, "").replace(/'/g, "'\\''") + "'"
   }
 
-  // After an Omarchy update: has Omarchy's bar moved under Barcraft's copy?
-  // Notify-only; merging stays a deliberate step (scripts/sync-upstream.sh).
-  // Header, then a digest of the rest: Barcraft only ever replaces or removes
-  // a hook whose digest still matches, so an edited copy is left alone.
   function updateHookScript() {
     return SkinParser.updateHookScript(pluginDir, strings.t("hook.changed"), Qt.md5)
   }
 
-  // Everything 0.5.0 and 0.5.1 could have written here, in any language they
-  // shipped, so an untouched older hook is still recognised as Barcraft's.
   function legacyUpdateHookScripts() {
     return SkinParser.legacyUpdateHookScripts(pluginDir)
   }
@@ -1199,8 +1118,6 @@ Item {
     syncUpdateHook()
   }
 
-  // The menu file is shared: read it fresh, change only Barcraft's block, and
-  // write it back only if nobody else saved it in between (editSharedFile).
   function syncMenu() {
     if (!isPrimary || !settled) return
     if (_menuSyncBusy) {
@@ -1211,7 +1128,7 @@ Item {
     _menuSyncAgain = false
     var want = !!prefs.omarchyMenu
 
-    editSharedFile(menuExtensionPath, function(current) {
+    store.editSharedFile(menuExtensionPath, function(current) {
       if (!want && current.indexOf("barcraft:begin") < 0) return null
       return SkinParser.applyMenuBlock(current, want ? engine.menuEntries() : null)
     }, function() {
@@ -1220,9 +1137,6 @@ Item {
     })
   }
 
-  // post-update.d/barcraft-sync is replaced or removed only while it is
-  // exactly what Barcraft wrote (isPristineUpdateHook), and only if it is
-  // still unchanged at that moment. Anything else in its place is left alone.
   function syncUpdateHook() {
     if (!isPrimary || !settled) return
     if (_hookSyncBusy) {
@@ -1238,13 +1152,13 @@ Item {
       if (engine._hookSyncAgain) Qt.callLater(engine.syncUpdateHook)
     }
 
-    readTextFile(updateHookPath, function(status, text) {
+    store.readTextFile(updateHookPath, function(status, text) {
       if (status === "missing") {
         if (!want) {
           finish()
           return
         }
-        engine.writeFile(engine.updateHookPath, engine.updateHookScript(), function() { finish() },
+        store.writeFile(engine.updateHookPath, engine.updateHookScript(), function() { finish() },
           { expect: "missing", chmodExec: true })
         return
       }
@@ -1252,7 +1166,7 @@ Item {
       var pristine = status === "ok"
         && SkinParser.isPristineUpdateHook(text, Qt.md5, engine.legacyUpdateHookScripts())
       if (pristine && !want) {
-        engine.removeFileIfUnchanged(engine.updateHookPath, Qt.md5(text), function() { finish() })
+        store.removeFileIfUnchanged(engine.updateHookPath, Qt.md5(text), function() { finish() })
         return
       }
       if (pristine) {
@@ -1261,7 +1175,7 @@ Item {
           finish()
           return
         }
-        engine.writeFile(engine.updateHookPath, desired, function() { finish() },
+        store.writeFile(engine.updateHookPath, desired, function() { finish() },
           { expect: Qt.md5(text), chmodExec: true })
         return
       }
@@ -1270,8 +1184,6 @@ Item {
         return
       }
 
-      // Unreadable, a symlink, somebody else's, or edited since Barcraft wrote
-      // it: leave it untouched and turn the toggle back off to match.
       console.warn("Barcraft: keeping existing " + updateHookPath + " (not Barcraft's, or edited since)")
       if (engine.prefs.updateCheck) {
         var nextPrefs = {}
@@ -1298,7 +1210,15 @@ Item {
       }
     }
     var mons = []
-    for (var screen in monitorSkins) mons.push(screen + "=" + monitorSkins[screen])
+    var seenScreens = {}
+    for (var screen in monitorSkins) {
+      seenScreens[screen] = true
+      var tag = monitorDrafts && monitorDrafts[screen] ? (monitorSkins[screen] + " (edited)") : monitorSkins[screen]
+      mons.push(screen + "=" + tag)
+    }
+    for (var dScreen in monitorDrafts) {
+      if (!seenScreens[dScreen]) mons.push(dScreen + "=draft(" + monitorDrafts[dScreen].name + ")")
+    }
     var lines = [
       "Barcraft " + (manifest && manifest.version ? manifest.version : "?") + " is the active bar",
       "Studio widget on the bar: " + (placed ? "yes" : "no (omarchy bar put thepixelgardener.barcraft --section right)"),
@@ -1312,6 +1232,28 @@ Item {
       "Plugin folder: " + pluginDir,
       "Omarchy bar base: scripts/sync-upstream.sh --check tells whether Omarchy's bar moved"
     ]
+    var diagLines = []
+    if (themeSkinInspection) {
+      for (var te = 0; te < themeSkinInspection.errors.length; te++) {
+        diagLines.push("  theme [bar-skin]: " + themeSkinInspection.errors[te].message)
+      }
+      for (var ta = 0; ta < themeSkinInspection.adjustments.length; ta++) {
+        diagLines.push("  theme [bar-skin]: " + themeSkinInspection.adjustments[ta].message)
+      }
+    }
+    for (var d = 0; d < skinDiagnostics.length; d++) {
+      var item = skinDiagnostics[d]
+      for (var e = 0; e < item.errors.length; e++) {
+        diagLines.push("  " + item.path + ": " + item.errors[e].message)
+      }
+      for (var a = 0; a < item.adjustments.length; a++) {
+        diagLines.push("  " + item.path + ": " + item.adjustments[a].message)
+      }
+    }
+    if (diagLines.length > 0) {
+      lines.push("Skin diagnostics:")
+      for (var dl = 0; dl < diagLines.length; dl++) lines.push(diagLines[dl])
+    }
     return lines.join("\n")
   }
 
@@ -1338,51 +1280,13 @@ Item {
     var targetScale = committedIconScale
     var reset = Math.abs(targetScale - 1) < 0.001
 
-    editSharedFile(userShellTomlPath, function(current) {
+    store.editSharedFile(userShellTomlPath, function(current) {
       if (reset && current.indexOf("# barcraft") < 0) return null
       return SkinParser.applyBarIconOverrides(current, targetScale)
     }, function() {
       engine._iconSyncBusy = false
       if (engine._iconSyncAgain) Qt.callLater(engine.applyIconScale)
     })
-  }
-
-  // Saved skins from both folders (the current one first, so it wins a name
-  // clash), read with jq like Omarchy's own scripts: no python needed.
-  // Rejects symlinks so `stat -c %s` cannot be bypassed by a tiny symlink to a
-  // huge file, and caps the file count before buffering into jq -s.
-  Process {
-    id: scanProc
-    command: ["sh", "-c",
-      "n=0; for d in \"$@\"; do for f in \"$d\"/*.toml; do "
-      + "[ ! -L \"$f\" ] && [ -f \"$f\" ] || continue; "
-      + "size=$(stat -c %s \"$f\" 2>/dev/null || echo 999999); "
-      + "[ \"$size\" -le 32768 ] || continue; "
-      + "jq -Rs --arg path \"$f\" '{path: $path, text: .}' \"$f\"; "
-      + "n=$((n + 1)); [ \"$n\" -ge 200 ] && break 2; "
-      + "done; done | jq -s '.'",
-      "sh", engine.userSkinsDir, engine.legacySkinsDir]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        try {
-          var rows = JSON.parse(text || "[]")
-          var parsed = SkinParser.parseSkinLibrary(rows, [engine.userSkinsDir, engine.legacySkinsDir], engine.builtinSkins)
-          if (JSON.stringify(parsed) !== JSON.stringify(engine.userSkins)) {
-            engine.userSkins = parsed
-            engine.revision++
-          }
-        } catch (e) {
-          console.warn("Barcraft: could not read saved skins: " + e)
-        }
-      }
-    }
-    onExited: {
-      if (engine._scanAgain) {
-        engine._scanAgain = false
-        Qt.callLater(engine.rescanUserSkins)
-      }
-    }
   }
 
   // A paste into a Studio field (LineField asks rather than reading the
@@ -1417,20 +1321,105 @@ Item {
     command: ["sh", "-c", "timeout 2 wl-paste --no-newline --type text 2>/dev/null | head -c 32769"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: engine.importText(text)
+      onStreamFinished: engine.importText(text, engine._pasteTarget)
+    }
+  }
+
+  // ---- About & explicit plugin update check --------------------------------
+
+  property string _updatePayload: ""
+  property bool _updateStreamDone: false
+  property bool _updateProcDone: false
+  property int _updateExitCode: -1
+  property bool _updateTimedOut: false
+
+  function checkForUpdates() {
+    if (updateCheckProc.running) return
+    updateState = "checking"
+    remoteVersion = ""
+    _updateTimedOut = false
+    _updatePayload = ""
+    _updateStreamDone = false
+    _updateProcDone = false
+    _updateExitCode = -1
+    updateCheckProc.running = true
+    updateCheckWatchdog.restart()
+  }
+
+  function _finishUpdateCheck() {
+    if (_updateTimedOut || !_updateStreamDone || !_updateProcDone) return
+    updateCheckWatchdog.stop()
+    if (_updateExitCode !== 0) {
+      updateState = "error"
+      notice("status.updateCheckFailed", "", true)
+      return
+    }
+    var remote = SkinParser.parseRemoteManifestVersion(_updatePayload, "thepixelgardener.barcraft")
+    var cmp = remote ? SkinParser.compareSemver(remote, pluginVersion) : null
+    if (!remote || cmp === null) {
+      updateState = "error"
+      notice("status.updateCheckFailed", "", true)
+      return
+    }
+    remoteVersion = remote
+    if (cmp > 0) {
+      updateState = "available"
+      notice("status.updateAvailable", remote, false)
+    } else if (cmp === 0) {
+      updateState = "uptodate"
+      notice("status.updateCurrent", pluginVersion, false)
+    } else {
+      updateState = "ahead"
+      notice("status.updateAhead", pluginVersion, false)
+    }
+  }
+
+  function requestPluginUpdate() {
+    runCommand(["omarchy-launch-floating-terminal-with-presentation", "omarchy plugin update thepixelgardener.barcraft"])
+  }
+
+  function openRepository() {
+    runCommand(["xdg-open", repositoryUrl])
+  }
+
+  function openIssues() {
+    runCommand(["xdg-open", issuesUrl])
+  }
+
+  Timer {
+    id: updateCheckWatchdog
+    interval: 8000
+    repeat: false
+    onTriggered: {
+      if (!updateCheckProc.running) return
+      engine._updateTimedOut = true
+      updateCheckProc.running = false
+      engine.updateState = "error"
+      engine.notice("status.updateCheckFailed", "", true)
+    }
+  }
+
+  Process {
+    id: updateCheckProc
+    command: ["sh", "-c",
+      "curl -fsSL --proto =https --proto-redir =https --tlsv1.2 --max-time 6 --max-filesize 16384 \"$1\" 2>/dev/null | head -c 16385",
+      "sh", engine.remoteManifestUrl]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        engine._updatePayload = text
+        engine._updateStreamDone = true
+        engine._finishUpdateCheck()
+      }
+    }
+    onExited: function(code) {
+      engine._updateExitCode = code
+      engine._updateProcDone = true
+      engine._finishUpdateCheck()
     }
   }
 
   Component.onCompleted: {
-    rescanUserSkins()
-    startSkinWatcher()
     loadTimer.restart()
-  }
-
-  Component.onDestruction: {
-    skinWatchRestart.stop()
-    skinWatchRecovered.stop()
-    skinRescanDebounce.stop()
-    skinWatcher.running = false
   }
 }

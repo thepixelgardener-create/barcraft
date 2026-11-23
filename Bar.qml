@@ -1788,6 +1788,7 @@ Item {
     QtObject {
       id: screenBar
       readonly property var shell: root.shell
+      readonly property string screenName: barWindow.screen ? barWindow.screen.name : ""
       readonly property color foreground: barWindow.screenForeground
       readonly property color barForeground: barWindow.screenBarForeground
       readonly property color background: barWindow.screenBackground
