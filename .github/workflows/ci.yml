@@ -72,8 +72,9 @@ jobs:
             console.log(`Checked manifest (${manifest.version}), ${enKeys.length} i18n keys, and QML invariants.`);
           '
 
-      - name: Run SkinParser, SkinStore & security tests
+      - name: Run BarModel, SkinParser, SkinStore & security tests
         run: |
+          node tests/barmodel.test.js
           node tests/skinparser.test.js
           node tests/skinstore.test.js
 

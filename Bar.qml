@@ -721,6 +721,55 @@ Item {
     if (activePopout === owner) activePopout = null
   }
 
+  // Barcraft: Omarchy's shipped shell.json, read only when first-run placement
+  // finds no bar.layout at all, so the write keeps every stock widget.
+  FileView {
+    id: stockShellDefaultsFile
+    path: (root.omarchyPath || "/usr/share/omarchy") + "/config/omarchy/shell.json"
+    preload: false
+    blockAllReads: true
+    watchChanges: false
+    printErrors: false
+  }
+
+  // Omarchy's stock layout, or null when it can't be read: placement then
+  // writes nothing rather than a layout that drops stock widgets.
+  function stockFallbackLayout() {
+    var raw = ""
+    try {
+      raw = String(stockShellDefaultsFile.text() || "").trim()
+    } catch (e) {}
+    if (!raw) return null
+    try {
+      var parsed = JSON.parse(raw)
+      if (parsed && Util.isPlainObject(parsed.bar) && Util.isPlainObject(parsed.bar.layout)) return parsed.bar.layout
+    } catch (e2) {}
+    console.warn("Barcraft: could not read Omarchy's stock bar layout from " + stockShellDefaultsFile.path)
+    return null
+  }
+
+  // Puts the Studio button on the bar when it belongs there (first run, or
+  // `force` for restoreButton). Returns "restored" when it was added or moved,
+  // "flagged" when only the placed marker was recorded, "present" when nothing
+  // needed to change and "error" when shell.json can't be written.
+  function ensureStudioButton(force) {
+    if (!root.shell || typeof root.shell.mutateShellConfig !== "function") return "error"
+    var id = "thepixelgardener.barcraft"
+    var options = { force: !!force }
+    var fallback = function() { return root.stockFallbackLayout() }
+    var probe = { bar: JSON.parse(JSON.stringify(Util.isPlainObject(root.barConfig) ? root.barConfig : {})) }
+    var reachableBefore = BarModel.studioButtonPlacement(probe.bar.layout, id).reachable
+    if (!BarModel.placeStudioButton(probe, id, fallback, options)) return "present"
+    var changed = false
+    var ok = root.shell.mutateShellConfig(function(config) {
+      if (BarModel.placeStudioButton(config, id, fallback, options)) changed = true
+    })
+    if (ok === false) return "error"
+    if (!changed) return "present"
+    skin.studioButtonPlaced = true
+    return reachableBefore ? "flagged" : "restored"
+  }
+
   // Barcraft: the skin engine every bar surface reads, and the IPC that a
   // keybinding reaches (`omarchy-shell barcraft reveal`).
   SkinEngine {
@@ -731,6 +780,7 @@ Item {
     barConfig: root.barConfig
     manifest: root.manifest
     vertical: root.vertical
+    ensureStudioButtonFn: function(force) { return root.ensureStudioButton(force) }
   }
   // The engine by a name no SkinLook property shadows.
   readonly property var barcraft: skin
@@ -750,6 +800,12 @@ Item {
     function studio(tab: string): void {
       var item = root.findPanelWidget("thepixelgardener.barcraft")
       if (item && typeof item.openTab === "function") item.openTab(tab)
+      else skin.notifyMissingStudioButton()
+    }
+    // Put the Barcraft Studio button back on the bar when removed earlier.
+    function restoreButton(): string {
+      var result = root.ensureStudioButton(true)
+      return result === "flagged" ? "present" : result
     }
     // Changes made here show their result in Omarchy's OSD.
     function toggleAutoHide(): void { skin.toggleAutoHide(); skin.announce() }
@@ -1021,7 +1077,10 @@ Item {
 
   function summonBarWidget(pluginId) {
     var item = findPanelWidget(pluginId)
-    if (!item || typeof item.open !== "function") return false
+    if (!item || typeof item.open !== "function") {
+      if (canonicalWidgetId(pluginId) === "thepixelgardener.barcraft") skin.notifyMissingStudioButton()
+      return false
+    }
     item.open()
     return true
   }
@@ -1441,6 +1500,12 @@ Item {
     list.splice(index, 1)
     writeLayout(expected, function(config) {
       BarModel.removeEntry(config, { region: removal.region, index: index, id: removal.id }, function(entry) { return Util.normalizeLayoutEntry(entry) })
+      if (removal.id === "thepixelgardener.barcraft") {
+        if (!Util.isPlainObject(config.bar)) config.bar = {}
+        if (!Util.isPlainObject(config.bar.barcraft)) config.bar.barcraft = {}
+        config.bar.barcraft.studioButtonPlaced = true
+        skin.studioButtonPlaced = true
+      }
     })
   }
 
@@ -1698,12 +1763,18 @@ Item {
     }
   }
 
-  // Hyprland's window list does not follow fullscreen on its own, and each
-  // BarPanel reads it to drop its input under a fullscreen window.
+  // Refresh the snapshots that decide whether fullscreen covers each bar,
+  // including focus-only scrolling changes and special-workspace toggles.
   Connections {
     target: Hyprland
     function onRawEvent(event) {
-      if (event && String(event.name) === "fullscreen") Hyprland.refreshToplevels()
+      var name = event ? String(event.name) : ""
+      if (name === "fullscreen" || name === "activewindowv2" || name === "moveworkspacev2") {
+        Hyprland.refreshToplevels()
+        Hyprland.refreshWorkspaces()
+      } else if (name === "activespecial") {
+        Hyprland.refreshMonitors()
+      }
     }
   }
 
@@ -1933,12 +2004,24 @@ Item {
     WlrLayershell.namespace: "omarchy-bar"
     WlrLayershell.layer: WlrLayer.Top
 
-    // Whether the active workspace on this screen holds a real fullscreen
-    // window, which fades the bar out.
+    // Only drop input while fullscreen covers the screen. A special workspace
+    // exposes the bar above the normal workspace beneath it.
     readonly property bool underFullscreen: {
       var monitor = Hyprland.monitorFor(screen)
       var workspace = monitor ? monitor.activeWorkspace : null
-      return !!workspace && BarModel.fullscreenOn(Hyprland.toplevels.values, workspace.id)
+      var ipc = monitor ? monitor.lastIpcObject : null
+      var special = ipc ? ipc.specialWorkspace : null
+      return !!workspace && !!ipc && BarModel.fullscreenOn(Hyprland.toplevels.values,
+        workspace.id, workspace.hasFullscreen, special ? special.name : null,
+        { x: ipc.x, y: ipc.y, width: screen.width, height: screen.height })
+    }
+
+    Connections {
+      target: barWindow.screen
+      function onGeometryChanged() {
+        Hyprland.refreshMonitors()
+        Hyprland.refreshToplevels()
+      }
     }
 
     // Idle, only the strip takes input, so the clear expanse passes clicks

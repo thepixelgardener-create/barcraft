@@ -14,7 +14,7 @@ Barcraft (`thepixelgardener.barcraft`) layers a zero-motion skin engine and keyb
 
 ## What's included
 
-- **8 built-in skins** — Classic: `Floating`, `Islands`, `Frosted`, `Capsule`, `Editorial`, `Statusline` *(compact 26px high-contrast developer bar with outlined widget chips)*. Wild Craft (still art): `Matrix`, `Runeforge`.
+- **9 built-in skins** — Classic: `Floating`, `Islands`, `Frosted`, `Capsule`, `Editorial`, `Statusline` *(compact 26px high-contrast developer bar with outlined widget chips)*. Wild Craft (still art): `Matrix`, `Runeforge`, `Amiga`.
 - **Omarchy standard switch** — jump back to pixel-identical stock `omarchy.bar` anytime while keeping the Studio and saved skins ready.
 - **Keyboard-first Studio** — hover or move the cursor (`hjkl`/arrows) to preview live, edit colors/geometry/surface/behavior, assign per-monitor skins, and copy/paste skins as TOML.
 - **Theme-native & still** — live `theme.<key>` swatches follow theme switches with automatic WCAG 4.5:1 ink contrast and zero looping animations.
@@ -46,11 +46,11 @@ Requires **Omarchy 4 (Quattro)** with the Quickshell bar. No external dependenci
 
 ```bash
 omarchy plugin add https://github.com/thepixelgardener-create/barcraft --enable
-omarchy bar use thepixelgardener.barcraft
-omarchy bar put thepixelgardener.barcraft --section right
 ```
 
-From a local checkout: `ln -s "$PWD" ~/.config/omarchy/plugins/thepixelgardener.barcraft`, then `omarchy-shell shell rescanPlugins` and the two `omarchy bar` commands above.
+Barcraft switches to its bar and places the Studio button in the right section on first run. If you later remove the button and want it back, run `omarchy-shell barcraft restoreButton`.
+
+From a local checkout: `ln -s "$PWD" ~/.config/omarchy/plugins/thepixelgardener.barcraft`, then `omarchy-shell shell rescanPlugins` and `omarchy bar use thepixelgardener.barcraft`.
 
 ### Remove
 

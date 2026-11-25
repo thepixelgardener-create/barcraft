@@ -14,6 +14,12 @@ var VALID_WIDGET_STYLES = ["plain", "pills", "chips"]
 var VALID_FILLS = ["solid", "gradient"]
 var VALID_AUTOHIDE_WHEN = ["always", "windows"]
 var RESERVED_SKIN_IDS = ["standard", "draft", "theme", "theme-skin"]
+var SKIN_FORMAT_VERSION = 1
+
+function sanitizeMd5(raw) {
+  var s = String(raw || "").trim().toLowerCase()
+  return /^[0-9a-f]{32}$/.test(s) ? s : ""
+}
 
 function isReservedSkinId(slug, builtinList) {
   var s = String(slug || "").trim().toLowerCase()
@@ -54,7 +60,7 @@ var WRITE_FILE_SCRIPT =
   "  if [ -n \"$expect\" ]; then " +
   "    [ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$expect\" ] || exit 3; " +
   "  fi; " +
-  "  mv -f -- \"$tmp\" \"$dest\" || exit 1; " +
+  "  mv -fT -- \"$tmp\" \"$dest\" || exit 1; " +
   "fi; " +
   "rm -f -- \"$tmp\"; trap - EXIT; " +
   "[ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$want\" ] || exit 1; " +
@@ -101,6 +107,100 @@ var READ_FILE_SCRIPT =
   "if [ ! -e \"$p\" ] && [ ! -L \"$p\" ]; then exit 3; fi; " +
   "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ -r \"$p\" ] || exit 4; " +
   "cat -- \"$p\""
+
+var MAX_SCANNED_SKINS = 200
+
+// Scans up to `limit` regular non-symlink `.toml` files (<= 32 KiB) from
+// userdir then legacydir, checking any pinned slugs first so active,
+// per-monitor, draft, and recently saved skins are never pushed past the limit
+// by a large skin pack. Outputs `{rows: [{path, text}...], truncated: N}` with
+// skipped counting capped at 1000 so huge folders stay fast.
+var SCAN_SKINS_SCRIPT =
+  "limit=$1; userdir=${2%/}; legacydir=${3%/}; shift 3; " +
+  "nl=$(printf '\\n_'); nl=${nl%_}; " +
+  "{ " +
+  "  n=0; skipped=0; seen=\"$nl\"; " +
+  "  emit() { " +
+  "    f=$1; " +
+  "    [ ! -L \"$f\" ] && [ -f \"$f\" ] && [ -r \"$f\" ] || return 0; " +
+  "    case \"$seen\" in *\"$nl$f$nl\"*) return 0 ;; esac; " +
+  "    seen=\"$seen$f$nl\"; " +
+  "    size=$(stat -c %s \"$f\" 2>/dev/null || echo 999999); " +
+  "    [ \"$size\" -le 32768 ] || return 0; " +
+  "    if [ \"$n\" -ge \"$limit\" ]; then " +
+  "      skipped=$((skipped + 1)); " +
+  "      return 0; " +
+  "    fi; " +
+  "    jq -Rs --arg path \"$f\" '{path: $path, text: .}' \"$f\"; " +
+  "    n=$((n + 1)); " +
+  "  }; " +
+  "  for slug in \"$@\"; do " +
+  "    [ -n \"$slug\" ] || continue; " +
+  "    [ -n \"$userdir\" ] && emit \"$userdir/$slug.toml\"; " +
+  "    [ -n \"$legacydir\" ] && emit \"$legacydir/$slug.toml\"; " +
+  "  done; " +
+  "  for d in \"$userdir\" \"$legacydir\"; do " +
+  "    [ -n \"$d\" ] && [ -d \"$d\" ] || continue; " +
+  "    for f in \"$d\"/*.toml; do " +
+  "      emit \"$f\"; " +
+  "      [ \"$skipped\" -ge 1000 ] && break 2; " +
+  "    done; " +
+  "  done; " +
+  "  printf '{\"__meta\":true,\"truncated\":%d}\\n' \"$skipped\"; " +
+  "} | jq -s '{rows: map(select(.__meta | not)), truncated: ((map(select(.__meta)) | last | .truncated) // 0)}'"
+
+// Collects safe filename slugs that must be scanned before the alphabetical
+// pass so active, per-monitor, draft, and recently saved skins can never be
+// pushed past MAX_SCANNED_SKINS by a large skin pack.
+function pinnedScanSlugs(activeSkinId, monitorSkins, draft, monitorDrafts, userSkins, builtinList, extraSlugs) {
+  var out = []
+  var seen = Object.create(null)
+  var fileById = Object.create(null)
+  var list = Array.isArray(userSkins) ? userSkins : []
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i]
+    if (!s || !s.id || !s.path) continue
+    var stem = String(s.path).replace(/^.*\//, "").replace(/\.toml$/i, "")
+    if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(stem)) fileById[s.id] = stem
+  }
+
+  function pushRaw(slug) {
+    var clean = String(slug || "").trim()
+    if (!clean || !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(clean)) return
+    if (isUnsafeKey(clean) || hasOwn(seen, clean) || out.length >= 32) return
+    seen[clean] = true
+    out.push(clean)
+  }
+
+  function addId(rawId) {
+    var id = String(rawId || "").trim()
+    if (!id || id === "theme" || id === "theme-skin") return
+    if (hasOwn(fileById, id)) {
+      pushRaw(fileById[id])
+      return
+    }
+    var m = id.match(/^(standard|draft|theme|theme-skin)-saved(?:-\d+)?$/)
+    if (m) pushRaw(m[1])
+    if (id !== "standard" && id !== "draft") pushRaw(id)
+  }
+
+  addId(activeSkinId)
+  if (monitorSkins && typeof monitorSkins === "object") {
+    for (var screen in monitorSkins) {
+      if (hasOwn(monitorSkins, screen)) addId(monitorSkins[screen])
+    }
+  }
+  if (draft && typeof draft === "object") addId(draft.id)
+  if (monitorDrafts && typeof monitorDrafts === "object") {
+    for (var ds in monitorDrafts) {
+      if (hasOwn(monitorDrafts, ds) && monitorDrafts[ds]) addId(monitorDrafts[ds].id)
+    }
+  }
+  if (Array.isArray(extraSlugs)) {
+    for (var e = 0; e < extraSlugs.length; e++) addId(extraSlugs[e])
+  }
+  return out
+}
 
 function dict(entries) {
   var o = Object.create(null)
@@ -462,8 +562,8 @@ function canonicalSkinId(id) {
 
 function sanitizeLabel(text, maxLen) {
   var s = String(text || "")
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[\r\n\t\u2028\u2029]+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
     .trim()
   return s.slice(0, maxLen || 48)
 }
@@ -643,10 +743,14 @@ function parseTomlSectionsWithLines(text) {
     }
     var key = kv[1] !== undefined ? kv[1] : kv[2]
     if (isUnsafeKey(key)) continue
+    if ((section === "bar-skin" || section === "") && hasOwn(out[section], key)) {
+      syntaxErrors.push({ line: lineNo, key: key, duplicate: true, message: "Line " + lineNo + ": duplicate key \"" + sanitizeLabel(key, 40) + "\"" })
+      continue
+    }
     var value = parseTomlValue(kv[3])
     if (value === null) {
       if (section === "bar-skin" || section === "") {
-        syntaxErrors.push({ line: lineNo, key: key, message: "Line " + lineNo + ": invalid value for \"" + key + "\"" })
+        syntaxErrors.push({ line: lineNo, key: key, message: "Line " + lineNo + ": invalid value for \"" + sanitizeLabel(key, 40) + "\"" })
       }
       continue
     }
@@ -666,7 +770,7 @@ function closestKeySuggestion(badKey) {
   if (!target || target.length > 40) return ""
   var best = ""
   var bestDist = 3
-  var candidates = ["preset"]
+  var candidates = ["format", "preset"]
   for (var k in KEY_MAP) if (hasOwn(KEY_MAP, k)) candidates.push(k)
   for (var i = 0; i < candidates.length; i++) {
     var c = candidates[i]
@@ -823,7 +927,9 @@ function tomlString(text) {
     .replace(/"/g, "\\\"")
     .replace(/\r/g, "\\r")
     .replace(/\n/g, "\\n")
-    .replace(/\t/g, "\\t") + "\""
+    .replace(/\t/g, "\\t")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029") + "\""
 }
 
 var KEY_MAP = dict({
@@ -875,10 +981,68 @@ function copySkin(skin) {
 
 // `lookup(id)` resolves `preset = "<skin id>"`, so a theme can name a skin
 // in one line and override only what it wants on top of it.
+var MAX_REPORTED_ERRORS = 20
+var MAX_KEY_SUGGESTIONS = 5
+var MAX_REPORTED_SKIPPED = 8
+
+// Keeps a hostile file or paste from producing thousands of diagnostics, and
+// keeps every message short and free of control characters.
+function capErrors(errors) {
+  var out = []
+  for (var i = 0; i < errors.length && i < MAX_REPORTED_ERRORS; i++) {
+    var e = errors[i]
+    out.push({
+      line: e.line || 0,
+      key: sanitizeLabel(e.key, 40),
+      suggestion: e.suggestion || "",
+      message: sanitizeLabel(e.message, 160)
+    })
+  }
+  if (errors.length > MAX_REPORTED_ERRORS) {
+    out.push({ line: 0, key: "", message: "…and " + (errors.length - MAX_REPORTED_ERRORS) + " more" })
+  }
+  return out
+}
+
+function skippedSummary(keys) {
+  var shown = keys.slice(0, MAX_REPORTED_SKIPPED).join(", ")
+  return keys.length > MAX_REPORTED_SKIPPED ? shown + " +" + (keys.length - MAX_REPORTED_SKIPPED) : shown
+}
+
 function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
-  var errors = Array.isArray(extraErrors) ? extraErrors.slice() : []
+  var tokenErrors = Array.isArray(extraErrors) ? extraErrors : []
+  var errors = []
   var adjustments = []
+  var skippedKeys = []
   var appliedCount = 0
+  var styleCount = 0
+  var suggestions = 0
+  var formatVersion = SKIN_FORMAT_VERSION
+  function skip(key) {
+    var label = sanitizeLabel(key, 32)
+    if (label && skippedKeys.indexOf(label) === -1) skippedKeys.push(label)
+  }
+  if (map["format"] !== undefined) {
+    var rawFmt = String(map["format"] || "").trim()
+    var fmtLine = lineMap && lineMap["format"] ? lineMap["format"] : 0
+    if (!/^[1-9]\d{0,5}$/.test(rawFmt)) {
+      errors.push({
+        line: fmtLine,
+        key: "format",
+        message: formatLinePrefix(fmtLine) + "invalid format \"" + sanitizeLabel(rawFmt, 12) + "\""
+      })
+    } else {
+      formatVersion = parseInt(rawFmt, 10)
+    }
+  }
+  var newerFormat = formatVersion > SKIN_FORMAT_VERSION
+  // A newer format may use values or syntax this version cannot read: those
+  // lines are skipped and reported, everything else still applies.
+  for (var t = 0; t < tokenErrors.length; t++) {
+    var te = tokenErrors[t]
+    if (newerFormat) skip(te.key ? te.key : "line " + te.line)
+    else errors.push(te)
+  }
   var base = null
   if (map["preset"] !== undefined) {
     var presetName = String(map["preset"] || "").trim()
@@ -886,43 +1050,74 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     if (typeof lookup === "function") base = lookup(presetName)
     if (base) {
       appliedCount++
+      styleCount++
+    } else if (newerFormat) {
+      skip("preset")
     } else {
       errors.push({
         line: pLine,
         key: "preset",
-        message: formatLinePrefix(pLine) + "unknown preset \"" + presetName + "\""
+        message: formatLinePrefix(pLine) + "unknown preset \"" + sanitizeLabel(presetName, 40) + "\""
       })
     }
   }
   var merged = base ? copySkin(base) : {}
   var named = false
   for (var key in map) {
-    if (!hasOwn(map, key) || isUnsafeKey(key) || key === "preset") continue
+    if (!hasOwn(map, key) || isUnsafeKey(key) || key === "preset" || key === "format") continue
     var lineNo = lineMap && lineMap[key] ? lineMap[key] : 0
     var field = hasOwn(KEY_MAP, key) ? KEY_MAP[key] : ""
     if (!field) {
-      var sug = closestKeySuggestion(key)
+      if (newerFormat) {
+        skip(key)
+        continue
+      }
+      var sug = suggestions < MAX_KEY_SUGGESTIONS ? closestKeySuggestion(key) : ""
+      suggestions++
       errors.push({
         line: lineNo,
         key: key,
         suggestion: sug,
-        message: formatLinePrefix(lineNo) + "unknown key \"" + key + "\"" + (sug ? " (did you mean \"" + sug + "\"?)" : "")
+        message: formatLinePrefix(lineNo) + "unknown key \"" + sanitizeLabel(key, 40) + "\"" + (sug ? " (did you mean \"" + sug + "\"?)" : "")
       })
       continue
     }
     if (key === "inner-padding" && map["inner-padding-x"] !== undefined) continue
-    if (!validateRawEntry(key, map[key], lineNo, errors, adjustments)) continue
+    if (newerFormat) {
+      var entryErrors = []
+      if (!validateRawEntry(key, map[key], lineNo, entryErrors, adjustments)) {
+        skip(key)
+        continue
+      }
+    } else if (!validateRawEntry(key, map[key], lineNo, errors, adjustments)) {
+      continue
+    }
     merged[field] = map[key]
     appliedCount++
+    if (key !== "name" && key !== "description" && key !== "id") styleCount++
     if (field === "name") named = true
+  }
+  if (newerFormat && skippedKeys.length > 0) {
+    adjustments.push({
+      line: 0,
+      key: "format",
+      message: "format " + formatVersion + " is newer than this Barcraft; skipped: " + skippedSummary(skippedKeys)
+    })
   }
   if (!named && !base) merged.name = fallbackId
   if (!merged.id) merged.id = fallbackId
+  // Files and theme skins load whenever any key applied, as in 0.7. Paste
+  // additionally requires a style key (styleCount); see SkinEngine.importText.
   var skin = appliedCount > 0 ? normalizeSkin(merged, fallbackId, source) : null
   return {
     skin: skin,
     appliedCount: appliedCount,
-    errors: errors,
+    styleCount: styleCount,
+    formatVersion: formatVersion,
+    newerFormat: newerFormat,
+    skippedKeys: skippedKeys,
+    skippedSummary: skippedSummary(skippedKeys),
+    errors: capErrors(errors),
     adjustments: adjustments
   }
 }
@@ -960,11 +1155,17 @@ function extractSkinKvMapWithLines(text) {
   var skinLines = lines["bar-skin"] || Object.create(null)
   var hasSkinSection = hasOwn(sections, "bar-skin")
   var k
+  var typoChecks = 0
   for (k in top) {
-    if (hasOwn(KEY_MAP, k) || k === "preset") {
+    var known = hasOwn(KEY_MAP, k) || k === "preset" || k === "format"
+    // Without a [bar-skin] header, other top-level keys are ignored, except
+    // one that is a near-miss of a skin key ("heigth"): that is a typo, and
+    // passing it on lets the strict paste report it.
+    var typo = !known && !hasSkinSection && typoChecks++ < 50 && closestKeySuggestion(k) !== ""
+    if (known || typo) {
       map[k] = top[k]
       lineMap[k] = topLines[k] || 0
-      found = true
+      if (known) found = true
     }
   }
   for (k in skinSec) {
@@ -992,7 +1193,17 @@ function extractSkinKvMap(text) {
 function inspectToml(text, fallbackId, source, lookup) {
   var extracted = extractSkinKvMapWithLines(text)
   if (!extracted) {
-    return { skin: null, appliedCount: 0, errors: [], adjustments: [] }
+    return {
+      skin: null,
+      appliedCount: 0,
+      styleCount: 0,
+      formatVersion: SKIN_FORMAT_VERSION,
+      newerFormat: false,
+      skippedKeys: [],
+      skippedSummary: "",
+      errors: [],
+      adjustments: []
+    }
   }
   return inspectKvMap(extracted.map, extracted.lineMap, fallbackId, source, lookup, extracted.syntaxErrors)
 }
@@ -1172,7 +1383,17 @@ function classifySkinWatchEvent(line, userSkinsDir, legacySkinsDir, configDir) {
 
 function inspectShellValues(shellValues, lookup) {
   if (!shellValues || typeof shellValues !== "object") {
-    return { skin: null, appliedCount: 0, errors: [], adjustments: [] }
+    return {
+      skin: null,
+      appliedCount: 0,
+      styleCount: 0,
+      formatVersion: SKIN_FORMAT_VERSION,
+      newerFormat: false,
+      skippedKeys: [],
+      skippedSummary: "",
+      errors: [],
+      adjustments: []
+    }
   }
   var map = Object.create(null)
   var found = false
@@ -1187,7 +1408,19 @@ function inspectShellValues(shellValues, lookup) {
       }
     }
   }
-  if (!found) return { skin: null, appliedCount: 0, errors: [], adjustments: [] }
+  if (!found) {
+    return {
+      skin: null,
+      appliedCount: 0,
+      styleCount: 0,
+      formatVersion: SKIN_FORMAT_VERSION,
+      newerFormat: false,
+      skippedKeys: [],
+      skippedSummary: "",
+      errors: [],
+      adjustments: []
+    }
+  }
   var res = inspectKvMap(map, null, "theme-skin", "theme", lookup, [])
   if (res.skin) res.skin.id = "theme-skin"
   return res
@@ -1212,6 +1445,7 @@ function serializeToml(skin, options) {
     "# Barcraft skin. Save as ~/.config/omarchy/bar/skins/<name>.toml,",
     "# or ship in a theme as shell.bar-skin.toml (or [bar-skin] in shell.toml).",
     "[bar-skin]",
+    "format           = " + SKIN_FORMAT_VERSION,
     "name             = " + tomlString(s.name),
     s.description ? "description      = " + tomlString(s.description) : null,
     "mode             = \"" + s.mode + "\"",
@@ -1522,8 +1756,9 @@ function skinToJson(skin) {
   return out
 }
 
-function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard, monitorDrafts) {
+function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard, monitorDrafts, meta) {
   var p = normalizePrefs(prefs)
+  var extra = meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {}
   var out = {
     standard: !!standard,
     skin: slugify(activeSkinId),
@@ -1534,6 +1769,7 @@ function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard
     omarchyMenu: p.omarchyMenu,
     updateCheck: p.updateCheck
   }
+  if (extra.studioButtonPlaced) out.studioButtonPlaced = true
   var mons = {}
   var any = false
   for (var screen in (monitors || {})) {
@@ -1544,7 +1780,11 @@ function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard
     any = true
   }
   if (any) out.monitors = mons
-  if (draft) out.draft = skinToJson(draft)
+  if (draft) {
+    out.draft = skinToJson(draft)
+    var mainHash = sanitizeMd5(extra.draftBaseHash)
+    if (mainHash) out.draftBaseHash = mainHash
+  }
   var mDrafts = {}
   var anyDraft = false
   for (var dScreen in (monitorDrafts || {})) {
@@ -1554,7 +1794,24 @@ function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard
     mDrafts[dName] = skinToJson(dSkin)
     anyDraft = true
   }
-  if (anyDraft) out.monitorDrafts = mDrafts
+  if (anyDraft) {
+    out.monitorDrafts = mDrafts
+    var rawHashes = extra.monitorDraftBaseHashes && typeof extra.monitorDraftBaseHashes === "object" && !Array.isArray(extra.monitorDraftBaseHashes)
+      ? extra.monitorDraftBaseHashes : null
+    if (rawHashes) {
+      var mHashes = {}
+      var anyHash = false
+      for (var hScreen in mDrafts) {
+        if (!hasOwn(mDrafts, hScreen)) continue
+        var hVal = sanitizeMd5(rawHashes[hScreen])
+        if (hVal) {
+          mHashes[hScreen] = hVal
+          anyHash = true
+        }
+      }
+      if (anyHash) out.monitorDraftBaseHashes = mHashes
+    }
+  }
   return out
 }
 
@@ -1575,10 +1832,13 @@ function stateFromJson(obj, lookup) {
     activeSkinId: o.skin !== undefined ? slugify(o.skin) : "floating",
     followTheme: parseBool(o.followTheme, true),
     standard: parseBool(o.standard, false),
+    studioButtonPlaced: parseBool(o.studioButtonPlaced, false),
     prefs: normalizePrefs(o),
     monitors: {},
     draft: null,
-    monitorDrafts: {}
+    draftBaseHash: "",
+    monitorDrafts: {},
+    monitorDraftBaseHashes: {}
   }
   var mons = o.monitors && typeof o.monitors === "object" && !Array.isArray(o.monitors) ? o.monitors : {}
   for (var screen in mons) {
@@ -1588,13 +1848,19 @@ function stateFromJson(obj, lookup) {
     state.monitors[name] = id === "theme" ? "theme" : slugify(id)
   }
   state.draft = parseDraftObject(o.draft, state.activeSkinId, lookup)
+  if (state.draft) state.draftBaseHash = sanitizeMd5(o.draftBaseHash)
   var mDrafts = o.monitorDrafts && typeof o.monitorDrafts === "object" && !Array.isArray(o.monitorDrafts) ? o.monitorDrafts : {}
+  var mHashes = o.monitorDraftBaseHashes && typeof o.monitorDraftBaseHashes === "object" && !Array.isArray(o.monitorDraftBaseHashes) ? o.monitorDraftBaseHashes : {}
   for (var dScreen in mDrafts) {
     var dName = sanitizeScreenName(dScreen)
     if (!dName) continue
     var fallback = state.monitors[dName] || state.activeSkinId
     var parsedDraft = parseDraftObject(mDrafts[dScreen], fallback, lookup)
-    if (parsedDraft) state.monitorDrafts[dName] = parsedDraft
+    if (parsedDraft) {
+      state.monitorDrafts[dName] = parsedDraft
+      var dh = sanitizeMd5(mHashes[dScreen])
+      if (dh) state.monitorDraftBaseHashes[dName] = dh
+    }
   }
   return state
 }
@@ -1738,11 +2004,16 @@ if (typeof module !== "undefined") {
     parseFromShellValues: parseFromShellValues,
     inspectShellValues: inspectShellValues,
     RESERVED_SKIN_IDS: RESERVED_SKIN_IDS,
+    SKIN_FORMAT_VERSION: SKIN_FORMAT_VERSION,
+    sanitizeMd5: sanitizeMd5,
     isReservedSkinId: isReservedSkinId,
     WRITE_FILE_SCRIPT: WRITE_FILE_SCRIPT,
     REMOVE_SKIN_FILES_SCRIPT: REMOVE_SKIN_FILES_SCRIPT,
     REMOVE_IF_UNCHANGED_SCRIPT: REMOVE_IF_UNCHANGED_SCRIPT,
     READ_FILE_SCRIPT: READ_FILE_SCRIPT,
+    MAX_SCANNED_SKINS: MAX_SCANNED_SKINS,
+    SCAN_SKINS_SCRIPT: SCAN_SKINS_SCRIPT,
+    pinnedScanSlugs: pinnedScanSlugs,
     parseSemver: parseSemver,
     compareSemver: compareSemver,
     parseRemoteManifestVersion: parseRemoteManifestVersion,

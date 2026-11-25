@@ -653,25 +653,136 @@ function barSizeFor(sizes, screenName, fallback) {
   return size > 0 ? size : fallback
 }
 
-// Whether a workspace holds a real fullscreen window, which fades the bar out
-// and has to take the clicks along its edge. Hyprland reports a maximized
-// window as fullscreen 1 and a real one with bit 2 set; only the latter hides
-// the bar. `toplevels` are Quickshell's Hyprland toplevels.
-function fullscreenOn(toplevels, workspaceId) {
+// Only a real fullscreen window covering the output takes the bar's clicks.
+// Scrolling keeps fullscreen flags on columns outside the viewport.
+function fullscreenOn(toplevels, workspaceId, hasFullscreen, specialWorkspaceName, screen) {
+  if (!specialWorkspaceName && !hasFullscreen) return false
   var list = toplevels || []
   for (var i = 0; i < list.length; i++) {
     var toplevel = list[i]
-    if (!toplevel || !toplevel.workspace || toplevel.workspace.id !== workspaceId) continue
+    if (!toplevel || !toplevel.workspace) continue
+    if (specialWorkspaceName) {
+      if (toplevel.workspace.name !== specialWorkspaceName) continue
+    } else if (toplevel.workspace.id !== workspaceId) continue
     var ipc = toplevel.lastIpcObject
-    if (ipc && (Number(ipc.fullscreen) & 2) !== 0) return true
+    if (!ipc || (Number(ipc.fullscreen) & 2) === 0 || !ipc.at || !ipc.size) continue
+    // IPC geometry rounds logical pixels at fractional scales.
+    if (ipc.at[0] <= screen.x + 1 && ipc.at[1] <= screen.y + 1
+        && ipc.at[0] + ipc.size[0] >= screen.x + screen.width - 1
+        && ipc.at[1] + ipc.size[1] >= screen.y + screen.height - 1) return true
   }
   return false
+}
+
+// Barcraft: where the Studio button can be reached in a layout. An entry in
+// the tray drawer only counts while the tray itself is on the bar; without
+// it the drawer is never drawn and the button is unreachable.
+function studioButtonPlacement(layout, widgetId) {
+  var out = { found: false, reachable: false, section: "", index: -1 }
+  if (!isPlainObject(layout)) return out
+  var trayOnBar = false
+  for (var s = 0; s < sections.length; s++) {
+    var list = layout[sections[s]]
+    if (!Array.isArray(list)) continue
+    for (var i = 0; i < list.length; i++) {
+      var id = entryId(list[i])
+      if (id === "omarchy.tray" && sections[s] !== "tray") trayOnBar = true
+      if (id === widgetId && !out.found) {
+        out.found = true
+        out.section = sections[s]
+        out.index = i
+      }
+    }
+  }
+  out.reachable = out.found && (out.section !== "tray" || trayOnBar)
+  return out
+}
+
+// Barcraft: ensures the Barcraft Studio button sits in `bar.layout` on a
+// genuine first run (when `bar.barcraft` does not exist yet), sets
+// `bar.barcraft.studioButtonPlaced = true`, and never re-adds a button the
+// user later removed or an existing 0.7 user intentionally took off the bar.
+// Pass `{ force: true }` for an explicit `restoreButton` request, which also
+// moves a button stranded in the drawer of a tray that is gone.
+// `fallbackLayout` (an object, or a function returning one) is Omarchy's
+// stock layout, read only when `bar.layout` is missing; without it nothing
+// is written, so a missing layout is never replaced by a partial one.
+// Returns the mutated `config` when a change was made, or `null` when nothing
+// needed to change.
+function placeStudioButton(config, id, fallbackLayout, options) {
+  var widgetId = String(id || "").trim()
+  if (!isPlainObject(config) || !widgetId) return null
+  var force = !!(options && options.force)
+  var bar = isPlainObject(config.bar) ? config.bar : null
+  var hasBarcraft = !!(bar && isPlainObject(bar.barcraft))
+  var alreadyFlagged = hasBarcraft && bar.barcraft.studioButtonPlaced === true
+
+  function cloneLayout(source) {
+    var out = {}
+    for (var s = 0; s < sections.length; s++) {
+      var name = sections[s]
+      var entries = source && Array.isArray(source[name]) ? source[name] : []
+      var copy = []
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i]
+        copy.push(e && typeof e === "object" ? JSON.parse(JSON.stringify(e)) : e)
+      }
+      out[name] = copy
+    }
+    return out
+  }
+
+  function markPlaced() {
+    if (!isPlainObject(bar.barcraft)) bar.barcraft = {}
+    bar.barcraft.studioButtonPlaced = true
+  }
+
+  if (!force) {
+    if (alreadyFlagged) return null
+    if (hasBarcraft) {
+      bar.barcraft.studioButtonPlaced = true
+      return config
+    }
+  }
+
+  var layoutMissing = !bar || !isPlainObject(bar.layout) || Object.keys(bar.layout).length === 0
+  var placement = layoutMissing ? { found: false, reachable: false } : studioButtonPlacement(bar.layout, widgetId)
+
+  if (placement.reachable) {
+    if (alreadyFlagged) return null
+    markPlaced()
+    return config
+  }
+
+  if (layoutMissing) {
+    var stock = typeof fallbackLayout === "function" ? fallbackLayout() : fallbackLayout
+    if (!isPlainObject(stock)) return null
+    if (!bar) {
+      config.bar = {}
+      bar = config.bar
+    }
+    bar.layout = cloneLayout(stock)
+    placement = studioButtonPlacement(bar.layout, widgetId)
+    if (placement.reachable) {
+      markPlaced()
+      return config
+    }
+  }
+
+  // Found only in the drawer of a tray that is gone: move it out.
+  if (placement.found) bar.layout[placement.section].splice(placement.index, 1)
+  if (!Array.isArray(bar.layout.right)) bar.layout.right = []
+  bar.layout.right.push({ id: widgetId })
+  markPlaced()
+  return config
 }
 
 if (typeof module !== "undefined") {
   module.exports = {
     barSizeFor: barSizeFor,
     fullscreenOn: fullscreenOn,
+    placeStudioButton: placeStudioButton,
+    studioButtonPlacement: studioButtonPlacement,
     centerBesideRight: centerBesideRight,
     cutoutPending: cutoutPending,
     cutoutTop: cutoutTop,

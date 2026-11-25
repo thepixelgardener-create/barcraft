@@ -29,6 +29,7 @@ CLI / IPC commands:
 ```bash
 omarchy-shell shell toggle thepixelgardener.barcraft   # open/close the Studio
 omarchy-shell barcraft studio geometry                 # open on a tab: presets, colors, geometry, surface, behavior
+omarchy-shell barcraft restoreButton                   # put the Studio button back on the bar if removed
 omarchy-shell barcraft reveal                          # peek an auto-hidden bar out
 omarchy-shell barcraft next                            # next skin (OSD), prints its name
 omarchy-shell barcraft setSkin statusline              # any skin id, "standard" or "theme"
@@ -71,6 +72,7 @@ omarchy-shell barcraft doctor                          # health report
 ## Development
 
 ```bash
+node tests/barmodel.test.js                            # fullscreen input model and first-run Studio button placement
 node tests/skinparser.test.js                          # parser, diagnostics, TOML, shell.json state, menu block, icon tokens
 node tests/skinstore.test.js                           # atomic file I/O, failed delete, external edits, rename rollback, slow-save guards
 QT_QPA_PLATFORM=offscreen /usr/lib/qt6/bin/qmltestrunner -input tests
