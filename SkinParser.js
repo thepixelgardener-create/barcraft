@@ -108,6 +108,100 @@ var READ_FILE_SCRIPT =
   "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ -r \"$p\" ] || exit 4; " +
   "cat -- \"$p\""
 
+var MAX_SCANNED_SKINS = 200
+
+// Scans up to `limit` regular non-symlink `.toml` files (<= 32 KiB) from
+// userdir then legacydir, checking any pinned slugs first so active,
+// per-monitor, draft, and recently saved skins are never pushed past the limit
+// by a large skin pack. Outputs `{rows: [{path, text}...], truncated: N}` with
+// skipped counting capped at 1000 so huge folders stay fast.
+var SCAN_SKINS_SCRIPT =
+  "limit=$1; userdir=${2%/}; legacydir=${3%/}; shift 3; " +
+  "nl=$(printf '\\n_'); nl=${nl%_}; " +
+  "{ " +
+  "  n=0; skipped=0; seen=\"$nl\"; " +
+  "  emit() { " +
+  "    f=$1; " +
+  "    [ ! -L \"$f\" ] && [ -f \"$f\" ] && [ -r \"$f\" ] || return 0; " +
+  "    case \"$seen\" in *\"$nl$f$nl\"*) return 0 ;; esac; " +
+  "    seen=\"$seen$f$nl\"; " +
+  "    size=$(stat -c %s \"$f\" 2>/dev/null || echo 999999); " +
+  "    [ \"$size\" -le 32768 ] || return 0; " +
+  "    if [ \"$n\" -ge \"$limit\" ]; then " +
+  "      skipped=$((skipped + 1)); " +
+  "      return 0; " +
+  "    fi; " +
+  "    jq -Rs --arg path \"$f\" '{path: $path, text: .}' \"$f\"; " +
+  "    n=$((n + 1)); " +
+  "  }; " +
+  "  for slug in \"$@\"; do " +
+  "    [ -n \"$slug\" ] || continue; " +
+  "    [ -n \"$userdir\" ] && emit \"$userdir/$slug.toml\"; " +
+  "    [ -n \"$legacydir\" ] && emit \"$legacydir/$slug.toml\"; " +
+  "  done; " +
+  "  for d in \"$userdir\" \"$legacydir\"; do " +
+  "    [ -n \"$d\" ] && [ -d \"$d\" ] || continue; " +
+  "    for f in \"$d\"/*.toml; do " +
+  "      emit \"$f\"; " +
+  "      [ \"$skipped\" -ge 1000 ] && break 2; " +
+  "    done; " +
+  "  done; " +
+  "  printf '{\"__meta\":true,\"truncated\":%d}\\n' \"$skipped\"; " +
+  "} | jq -s '{rows: map(select(.__meta | not)), truncated: ((map(select(.__meta)) | last | .truncated) // 0)}'"
+
+// Collects safe filename slugs that must be scanned before the alphabetical
+// pass so active, per-monitor, draft, and recently saved skins can never be
+// pushed past MAX_SCANNED_SKINS by a large skin pack.
+function pinnedScanSlugs(activeSkinId, monitorSkins, draft, monitorDrafts, userSkins, builtinList, extraSlugs) {
+  var out = []
+  var seen = Object.create(null)
+  var fileById = Object.create(null)
+  var list = Array.isArray(userSkins) ? userSkins : []
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i]
+    if (!s || !s.id || !s.path) continue
+    var stem = String(s.path).replace(/^.*\//, "").replace(/\.toml$/i, "")
+    if (/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(stem)) fileById[s.id] = stem
+  }
+
+  function pushRaw(slug) {
+    var clean = String(slug || "").trim()
+    if (!clean || !/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(clean)) return
+    if (isUnsafeKey(clean) || hasOwn(seen, clean) || out.length >= 32) return
+    seen[clean] = true
+    out.push(clean)
+  }
+
+  function addId(rawId) {
+    var id = String(rawId || "").trim()
+    if (!id || id === "theme" || id === "theme-skin") return
+    if (hasOwn(fileById, id)) {
+      pushRaw(fileById[id])
+      return
+    }
+    var m = id.match(/^(standard|draft|theme|theme-skin)-saved(?:-\d+)?$/)
+    if (m) pushRaw(m[1])
+    if (id !== "standard" && id !== "draft") pushRaw(id)
+  }
+
+  addId(activeSkinId)
+  if (monitorSkins && typeof monitorSkins === "object") {
+    for (var screen in monitorSkins) {
+      if (hasOwn(monitorSkins, screen)) addId(monitorSkins[screen])
+    }
+  }
+  if (draft && typeof draft === "object") addId(draft.id)
+  if (monitorDrafts && typeof monitorDrafts === "object") {
+    for (var ds in monitorDrafts) {
+      if (hasOwn(monitorDrafts, ds) && monitorDrafts[ds]) addId(monitorDrafts[ds].id)
+    }
+  }
+  if (Array.isArray(extraSlugs)) {
+    for (var e = 0; e < extraSlugs.length; e++) addId(extraSlugs[e])
+  }
+  return out
+}
+
 function dict(entries) {
   var o = Object.create(null)
   for (var k in entries) {
@@ -1917,6 +2011,9 @@ if (typeof module !== "undefined") {
     REMOVE_SKIN_FILES_SCRIPT: REMOVE_SKIN_FILES_SCRIPT,
     REMOVE_IF_UNCHANGED_SCRIPT: REMOVE_IF_UNCHANGED_SCRIPT,
     READ_FILE_SCRIPT: READ_FILE_SCRIPT,
+    MAX_SCANNED_SKINS: MAX_SCANNED_SKINS,
+    SCAN_SKINS_SCRIPT: SCAN_SKINS_SCRIPT,
+    pinnedScanSlugs: pinnedScanSlugs,
     parseSemver: parseSemver,
     compareSemver: compareSemver,
     parseRemoteManifestVersion: parseRemoteManifestVersion,

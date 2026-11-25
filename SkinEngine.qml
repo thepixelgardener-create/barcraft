@@ -66,6 +66,9 @@ Item {
   readonly property var wildSkins: builtinSkins.filter(function(s) { return s.category === "wild" })
   property var userSkins: []
   property var skinDiagnostics: []
+  property int truncatedSkinCount: 0
+  property var _recentSavedSlugs: []
+  property string _lastPinnedRescanKey: ""
   property var customSkin: SkinParser.defaultSkin()
   property bool hasCustomDraft: false
   // MD5 of the on-disk skin file the main draft started from ("" if none/unknown).
@@ -105,6 +108,58 @@ Item {
   // Emitted after a saved skin rename is confirmed on disk.
   signal skinRenamed(string oldId, string newId)
 
+  readonly property var pinnedSkinSlugs: SkinParser.pinnedScanSlugs(
+    activeSkinId, monitorSkins, hasCustomDraft ? customSkin : null,
+    monitorDrafts, userSkins, builtinSkins, _recentSavedSlugs)
+
+  function _rememberSavedSlug(slug) {
+    var s = String(slug || "").trim()
+    if (!s) return
+    var next = [s]
+    var prev = Array.isArray(_recentSavedSlugs) ? _recentSavedSlugs : []
+    for (var i = 0; i < prev.length && next.length < 20; i++) {
+      if (prev[i] !== s) next.push(prev[i])
+    }
+    _recentSavedSlugs = next
+  }
+
+  function _forgetSavedSlug(slug) {
+    var s = String(slug || "").trim()
+    if (!s || !Array.isArray(_recentSavedSlugs) || _recentSavedSlugs.indexOf(s) === -1) return
+    _recentSavedSlugs = _recentSavedSlugs.filter(function(item) { return item !== s })
+  }
+
+  function _rescanIfPinnedMissing() {
+    if (truncatedSkinCount <= 0) {
+      _lastPinnedRescanKey = ""
+      return
+    }
+    var slugs = pinnedSkinSlugs || []
+    if (slugs.length === 0) return
+    var missing = false
+    for (var i = 0; i < slugs.length; i++) {
+      var slug = slugs[i]
+      if (isUserSkin(slug)) continue
+      var foundByFile = false
+      for (var j = 0; j < userSkins.length; j++) {
+        var p = String(userSkins[j].path || "")
+        if (p.slice(-slug.length - 6) === "/" + slug + ".toml") {
+          foundByFile = true
+          break
+        }
+      }
+      if (!foundByFile) {
+        missing = true
+        break
+      }
+    }
+    if (!missing) return
+    var key = slugs.join(",")
+    if (key === _lastPinnedRescanKey) return
+    _lastPinnedRescanKey = key
+    Qt.callLater(store.rescan)
+  }
+
   SkinStore {
     id: store
     isPrimary: engine.isPrimary
@@ -112,14 +167,17 @@ Item {
     userSkinsDir: engine.userSkinsDir
     legacySkinsDir: engine.legacySkinsDir
     builtinSkins: engine.builtinSkins
-    onSkinsScanned: function(skins, diagnostics, renamedIds) {
+    pinnedSlugs: engine.pinnedSkinSlugs
+    onSkinsScanned: function(skins, diagnostics, renamedIds, truncatedCount) {
       engine.skinDiagnostics = diagnostics || []
       engine._renamedSkinIds = renamedIds || ({})
+      engine.truncatedSkinCount = Number(truncatedCount) > 0 ? Math.floor(Number(truncatedCount)) : 0
       if (JSON.stringify(skins) !== JSON.stringify(engine.userSkins)) {
         engine.userSkins = skins
         engine.revision++
       }
       engine._migrateRenamedIds()
+      engine._rescanIfPinnedMissing()
     }
   }
 
@@ -698,6 +756,7 @@ Item {
         return
       }
       engine.replaceUserSkin(slug, toSave)
+      engine._rememberSavedSlug(slug)
       // Only clear the target's draft and bind the new skin if the user hasn't
       // edited or switched that target while the write was in flight.
       if (engine._tokenFor(targetScreen) !== capturedToken) {
@@ -762,6 +821,8 @@ Item {
         return
       }
       engine.replaceUserSkin(id, renamed)
+      engine._forgetSavedSlug(id)
+      engine._rememberSavedSlug(slug)
       // A draft that started from the old file now starts from the renamed
       // one, unless the old file had already changed under it.
       var newHash = store.hashForPath(renamed.path)
@@ -819,6 +880,7 @@ Item {
         engine._setDraftBaseHash("", "")
       }
       engine.userSkins = kept
+      engine._forgetSavedSlug(id)
       var mons = {}
       for (var screen in engine.monitorSkins) {
         if (engine.monitorSkins[screen] !== id) mons[screen] = engine.monitorSkins[screen]
@@ -1122,6 +1184,7 @@ Item {
     }
     stateLoaded = true
     _migrateRenamedIds()
+    _rescanIfPinnedMissing()
     settleTimer.restart()
   }
 
@@ -1380,7 +1443,10 @@ Item {
       "Per-monitor skins: " + (mons.length ? mons.join(", ") : "none"),
       "Blur: skin " + (committedBlur ? "wants it" : "doesn't") + ", Omarchy background is " + (barTransparent ? "clear" : (barGlassy ? "glassy" : "opaque")),
       "Icon size: " + Math.round(committedIconScale * 100) + "%" + (Math.abs(committedIconScale - 1) > 0.001 ? " via [bar] tokens in ~/.config/omarchy/shell.toml" : ""),
-      "Saved skins: " + userSkins.length + " in " + userSkinsDir,
+      "Saved skins: " + userSkins.length + " in " + userSkinsDir
+        + (truncatedSkinCount > 0
+          ? " (" + (truncatedSkinCount >= 1000 ? "1000+" : truncatedSkinCount) + " more skipped; limit is " + SkinParser.MAX_SCANNED_SKINS + ")"
+          : ""),
       "Omarchy menu entries: " + (prefs.omarchyMenu ? "on" : "off") + ", update check hook: " + (prefs.updateCheck ? "on" : "off"),
       "Plugin folder: " + pluginDir,
       "Omarchy bar base: scripts/sync-upstream.sh --check tells whether Omarchy's bar moved"

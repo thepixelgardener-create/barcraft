@@ -1500,6 +1500,12 @@ Item {
     list.splice(index, 1)
     writeLayout(expected, function(config) {
       BarModel.removeEntry(config, { region: removal.region, index: index, id: removal.id }, function(entry) { return Util.normalizeLayoutEntry(entry) })
+      if (removal.id === "thepixelgardener.barcraft") {
+        if (!Util.isPlainObject(config.bar)) config.bar = {}
+        if (!Util.isPlainObject(config.bar.barcraft)) config.bar.barcraft = {}
+        config.bar.barcraft.studioButtonPlaced = true
+        skin.studioButtonPlaced = true
+      }
     })
   }
 

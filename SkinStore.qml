@@ -18,6 +18,8 @@ Item {
   property string userSkinsDir: ""
   property string legacySkinsDir: ""
   property var builtinSkins: []
+  property var pinnedSlugs: []
+  property int truncatedSkinCount: 0
 
   // path -> md5 of the content Barcraft last read or wrote for that skin file.
   property var skinHashes: ({})
@@ -28,7 +30,7 @@ Item {
   property int _scanStartGen: 0
   property var lastDiagnostics: []
 
-  signal skinsScanned(var skins, var diagnostics, var renamedIds)
+  signal skinsScanned(var skins, var diagnostics, var renamedIds, int truncatedCount)
 
   function allowedDirs() {
     return [userSkinsDir, legacySkinsDir]
@@ -419,17 +421,13 @@ Item {
 
   // Saved skins from both folders (the current one first, so it wins a name
   // clash), read with jq like Omarchy's own scripts: no python needed.
+  // Pinned slugs (active, per-monitor, draft, and recently saved skins) are
+  // scanned first so a large skin pack cannot push them past the 200-file cap.
   Process {
     id: scanProc
-    command: ["sh", "-c",
-      "n=0; for d in \"$@\"; do for f in \"$d\"/*.toml; do "
-      + "[ ! -L \"$f\" ] && [ -f \"$f\" ] || continue; "
-      + "size=$(stat -c %s \"$f\" 2>/dev/null || echo 999999); "
-      + "[ \"$size\" -le 32768 ] || continue; "
-      + "jq -Rs --arg path \"$f\" '{path: $path, text: .}' \"$f\"; "
-      + "n=$((n + 1)); [ \"$n\" -ge 200 ] && break 2; "
-      + "done; done | jq -s '.'",
-      "sh", store.userSkinsDir, store.legacySkinsDir]
+    command: ["sh", "-c", SkinParser.SCAN_SKINS_SCRIPT, "sh",
+      String(SkinParser.MAX_SCANNED_SKINS), store.userSkinsDir, store.legacySkinsDir]
+      .concat(Array.isArray(store.pinnedSlugs) ? store.pinnedSlugs : [])
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -442,16 +440,20 @@ Item {
             Qt.callLater(store.rescan)
             return
           }
-          var rows = JSON.parse(text || "[]")
+          var parsed = JSON.parse(text || "[]")
+          var rows = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.rows) ? parsed.rows : [])
+          var truncated = (!Array.isArray(parsed) && parsed && Number(parsed.truncated) > 0)
+            ? Math.floor(Number(parsed.truncated)) : 0
           var hashes = {}
           for (var i = 0; i < rows.length; i++) {
             var r = rows[i]
             if (r && r.path && typeof r.text === "string") hashes[r.path] = Qt.md5(r.text)
           }
           store.skinHashes = store._mergeScanHashes(hashes)
+          store.truncatedSkinCount = truncated
           var res = SkinParser.parseSkinLibraryDetailed(rows, [store.userSkinsDir, store.legacySkinsDir], store.builtinSkins)
           store.lastDiagnostics = res.diagnostics
-          store.skinsScanned(res.skins, res.diagnostics, res.renamedIds)
+          store.skinsScanned(res.skins, res.diagnostics, res.renamedIds, truncated)
         } catch (e) {
           console.warn("Barcraft: could not read saved skins: " + e)
         }

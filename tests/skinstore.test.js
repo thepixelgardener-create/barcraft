@@ -113,6 +113,9 @@ function loadEngineHarness(userDir, legacyDir, pendingOps) {
     _editTokens: {},
     _tokenEpoch: 0,
     _legacyWaits: 0,
+    truncatedSkinCount: 0,
+    _recentSavedSlugs: [],
+    _lastPinnedRescanKey: "",
     previewSkin: null,
     previewScreen: "",
     strings: {
@@ -179,6 +182,7 @@ function loadEngineHarness(userDir, legacyDir, pendingOps) {
   const fns = [
     "normalizeTarget", "_tokenFor", "_bumpToken", "_setMonitorDraft", "_setPasteUndo",
     "_draftBaseHashFor", "_setDraftBaseHash", "_captureDraftBaseHash",
+    "_rememberSavedSlug", "_forgetSavedSlug",
     "findSkinById", "isUserSkin", "monitorSkinFor", "monitorDraftFor", "hasDraftFor", "committedSkinFor",
     "standardFor", "currentName",
     "targetBaseId", "isSkinShared", "clearPreview", "clearPasteUndo",
@@ -729,6 +733,54 @@ test("skipped keys appear literally in the paste notice", () => {
     const h = loadEngineHarness(env.userDir, env.legacyDir)
     assert.strictEqual(h.ctx.importText("[bar-skin]\nformat = 2\nheight = 34\n\"a$&b\" = 1\n", ""), true)
     assert.ok(h.notices[h.notices.length - 1].arg.indexOf("a$&b") !== -1)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("large skin pack past the 200-file limit cannot push pinned active, monitor, or saved skins out of the scan", () => {
+  const env = makeTempEnv()
+  try {
+    const body = name => P.serializeToml(P.normalizeSkin({ id: name, name: name, height: 34 }, name, "user"))
+    // Drop a 212-file skin pack (pack-001 .. pack-212) plus two late-alphabet user skins.
+    for (let i = 1; i <= 212; i++) {
+      const slug = "pack-" + String(i).padStart(3, "0")
+      fs.writeFileSync(path.join(env.userDir, slug + ".toml"), body(slug), "utf8")
+    }
+    const mine = path.join(env.userDir, "zzz-mine.toml")
+    const mon = path.join(env.legacyDir, "zzz-monitor.toml")
+    fs.writeFileSync(mine, body("ZZZ Mine"), "utf8")
+    fs.writeFileSync(mon, body("ZZZ Monitor"), "utf8")
+    // Symlink and oversized file must be ignored and not counted toward the cap or truncated total.
+    fs.symlinkSync(mine, path.join(env.userDir, "aaa-link.toml"))
+    fs.writeFileSync(path.join(env.userDir, "aaa-huge.toml"), "x".repeat(40000), "utf8")
+
+    function runScan(limit, pinned) {
+      const r = spawnSync(
+        "sh",
+        ["-c", P.SCAN_SKINS_SCRIPT, "sh", String(limit), env.userDir, env.legacyDir, ...pinned],
+        { encoding: "utf8" }
+      )
+      assert.strictEqual(r.status, 0, r.stderr)
+      return JSON.parse(r.stdout)
+    }
+
+    // Without pinning, 200 files load, 14 are truncated, and zzz-* skins fall past the cap.
+    const unpinned = runScan(P.MAX_SCANNED_SKINS, [])
+    assert.strictEqual(unpinned.rows.length, P.MAX_SCANNED_SKINS)
+    assert.strictEqual(unpinned.truncated, 14)
+    assert.strictEqual(unpinned.rows.some(r => r.path === mine), false)
+    assert.strictEqual(unpinned.rows.some(r => r.path === mon), false)
+
+    // With pinned slugs (active main + monitor skin), both zzz-* skins load first, with no duplicates.
+    const pinnedSlugs = P.pinnedScanSlugs("zzz-mine", { "DP-2": "zzz-monitor" }, null, {}, [], P.builtinSkins(), [])
+    const pinned = runScan(P.MAX_SCANNED_SKINS, pinnedSlugs)
+    assert.strictEqual(pinned.rows.length, P.MAX_SCANNED_SKINS)
+    assert.strictEqual(pinned.truncated, 14)
+    assert.strictEqual(pinned.rows.filter(r => r.path === mine).length, 1)
+    assert.strictEqual(pinned.rows.filter(r => r.path === mon).length, 1)
+    assert.strictEqual(pinned.rows.some(r => r.path.endsWith("aaa-link.toml")), false)
+    assert.strictEqual(pinned.rows.some(r => r.path.endsWith("aaa-huge.toml")), false)
   } finally {
     cleanupDir(env.root)
   }

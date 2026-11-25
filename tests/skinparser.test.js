@@ -593,11 +593,13 @@ test("SkinEngine handlers: single-pass scan, per-monitor editing/zones, diagnost
     legacySkinsDir: ctx.legacySkinsDir,
     builtinSkins: ctx.builtinSkins,
     skinHashes: {},
+    truncatedSkinCount: 0,
     hashForPath: p => (ctx.store.skinHashes && ctx.store.skinHashes[p]) || "",
     lastDiagnostics: [],
     _mergeScanHashes: h => h,
-    skinsScanned: (skins, diags) => {
+    skinsScanned: (skins, diags, renamedIds, truncatedCount) => {
       ctx.skinDiagnostics = diags || []
+      ctx.truncatedSkinCount = truncatedCount || 0
       if (JSON.stringify(skins) !== JSON.stringify(ctx.userSkins)) {
         ctx.userSkins = skins
         ctx.revision++
@@ -1049,6 +1051,26 @@ test("StudioContent only honours an overwrite confirmation on the target it was 
   ctx.confirmOverwriteTarget = "DP-2"
   ctx.saveSkin()
   assert.deepStrictEqual(calls[1], { name: "Neon", force: true, target: "DP-2" })
+})
+
+test("pinnedScanSlugs collects active, monitor, draft, renamed-reserved, and recent slugs safely", () => {
+  const slugs = P.pinnedScanSlugs(
+    "zzz-main",
+    { "DP-2": "standard-saved", "HDMI-A-1": "theme", "eDP-1": "../evil" },
+    { id: "zzz-draft" },
+    { "DP-2": { id: "zzz-dp2-draft" } },
+    [{ id: "custom-alias", path: "/demo/skins/real-file.toml" }],
+    P.builtinSkins(),
+    ["custom-alias", "zzz-main", "bad/slug", "__proto__"]
+  )
+  assert.deepStrictEqual(slugs, [
+    "zzz-main",
+    "standard",
+    "standard-saved",
+    "zzz-draft",
+    "zzz-dp2-draft",
+    "real-file"
+  ])
 })
 
 console.log("SkinParser: " + passed + " tests passed")
