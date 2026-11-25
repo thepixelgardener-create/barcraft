@@ -14,6 +14,12 @@ var VALID_WIDGET_STYLES = ["plain", "pills", "chips"]
 var VALID_FILLS = ["solid", "gradient"]
 var VALID_AUTOHIDE_WHEN = ["always", "windows"]
 var RESERVED_SKIN_IDS = ["standard", "draft", "theme", "theme-skin"]
+var SKIN_FORMAT_VERSION = 1
+
+function sanitizeMd5(raw) {
+  var s = String(raw || "").trim().toLowerCase()
+  return /^[0-9a-f]{32}$/.test(s) ? s : ""
+}
 
 function isReservedSkinId(slug, builtinList) {
   var s = String(slug || "").trim().toLowerCase()
@@ -666,7 +672,7 @@ function closestKeySuggestion(badKey) {
   if (!target || target.length > 40) return ""
   var best = ""
   var bestDist = 3
-  var candidates = ["preset"]
+  var candidates = ["format", "preset"]
   for (var k in KEY_MAP) if (hasOwn(KEY_MAP, k)) candidates.push(k)
   for (var i = 0; i < candidates.length; i++) {
     var c = candidates[i]
@@ -878,7 +884,24 @@ function copySkin(skin) {
 function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
   var errors = Array.isArray(extraErrors) ? extraErrors.slice() : []
   var adjustments = []
+  var skippedKeys = []
   var appliedCount = 0
+  var styleCount = 0
+  var formatVersion = SKIN_FORMAT_VERSION
+  if (map["format"] !== undefined) {
+    var rawFmt = String(map["format"] || "").trim()
+    var fmtLine = lineMap && lineMap["format"] ? lineMap["format"] : 0
+    if (!/^[1-9]\d*$/.test(rawFmt)) {
+      errors.push({
+        line: fmtLine,
+        key: "format",
+        message: formatLinePrefix(fmtLine) + "invalid format \"" + rawFmt + "\""
+      })
+    } else {
+      formatVersion = parseInt(rawFmt, 10)
+    }
+  }
+  var newerFormat = formatVersion > SKIN_FORMAT_VERSION
   var base = null
   if (map["preset"] !== undefined) {
     var presetName = String(map["preset"] || "").trim()
@@ -886,6 +909,9 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     if (typeof lookup === "function") base = lookup(presetName)
     if (base) {
       appliedCount++
+      styleCount++
+    } else if (newerFormat) {
+      skippedKeys.push("preset")
     } else {
       errors.push({
         line: pLine,
@@ -897,10 +923,14 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
   var merged = base ? copySkin(base) : {}
   var named = false
   for (var key in map) {
-    if (!hasOwn(map, key) || isUnsafeKey(key) || key === "preset") continue
+    if (!hasOwn(map, key) || isUnsafeKey(key) || key === "preset" || key === "format") continue
     var lineNo = lineMap && lineMap[key] ? lineMap[key] : 0
     var field = hasOwn(KEY_MAP, key) ? KEY_MAP[key] : ""
     if (!field) {
+      if (newerFormat) {
+        skippedKeys.push(key)
+        continue
+      }
       var sug = closestKeySuggestion(key)
       errors.push({
         line: lineNo,
@@ -911,17 +941,30 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
       continue
     }
     if (key === "inner-padding" && map["inner-padding-x"] !== undefined) continue
-    if (!validateRawEntry(key, map[key], lineNo, errors, adjustments)) continue
+    if (newerFormat) {
+      var entryErrors = []
+      if (!validateRawEntry(key, map[key], lineNo, entryErrors, adjustments)) {
+        skippedKeys.push(key)
+        continue
+      }
+    } else if (!validateRawEntry(key, map[key], lineNo, errors, adjustments)) {
+      continue
+    }
     merged[field] = map[key]
     appliedCount++
+    if (key !== "name" && key !== "description" && key !== "id") styleCount++
     if (field === "name") named = true
   }
   if (!named && !base) merged.name = fallbackId
   if (!merged.id) merged.id = fallbackId
-  var skin = appliedCount > 0 ? normalizeSkin(merged, fallbackId, source) : null
+  var skin = styleCount > 0 ? normalizeSkin(merged, fallbackId, source) : null
   return {
     skin: skin,
-    appliedCount: appliedCount,
+    appliedCount: styleCount,
+    totalApplied: appliedCount,
+    formatVersion: formatVersion,
+    newerFormat: newerFormat,
+    skippedKeys: skippedKeys,
     errors: errors,
     adjustments: adjustments
   }
@@ -961,7 +1004,7 @@ function extractSkinKvMapWithLines(text) {
   var hasSkinSection = hasOwn(sections, "bar-skin")
   var k
   for (k in top) {
-    if (hasOwn(KEY_MAP, k) || k === "preset") {
+    if (hasOwn(KEY_MAP, k) || k === "preset" || k === "format") {
       map[k] = top[k]
       lineMap[k] = topLines[k] || 0
       found = true
@@ -992,7 +1035,16 @@ function extractSkinKvMap(text) {
 function inspectToml(text, fallbackId, source, lookup) {
   var extracted = extractSkinKvMapWithLines(text)
   if (!extracted) {
-    return { skin: null, appliedCount: 0, errors: [], adjustments: [] }
+    return {
+      skin: null,
+      appliedCount: 0,
+      totalApplied: 0,
+      formatVersion: SKIN_FORMAT_VERSION,
+      newerFormat: false,
+      skippedKeys: [],
+      errors: [],
+      adjustments: []
+    }
   }
   return inspectKvMap(extracted.map, extracted.lineMap, fallbackId, source, lookup, extracted.syntaxErrors)
 }
@@ -1172,7 +1224,16 @@ function classifySkinWatchEvent(line, userSkinsDir, legacySkinsDir, configDir) {
 
 function inspectShellValues(shellValues, lookup) {
   if (!shellValues || typeof shellValues !== "object") {
-    return { skin: null, appliedCount: 0, errors: [], adjustments: [] }
+    return {
+      skin: null,
+      appliedCount: 0,
+      totalApplied: 0,
+      formatVersion: SKIN_FORMAT_VERSION,
+      newerFormat: false,
+      skippedKeys: [],
+      errors: [],
+      adjustments: []
+    }
   }
   var map = Object.create(null)
   var found = false
@@ -1187,7 +1248,18 @@ function inspectShellValues(shellValues, lookup) {
       }
     }
   }
-  if (!found) return { skin: null, appliedCount: 0, errors: [], adjustments: [] }
+  if (!found) {
+    return {
+      skin: null,
+      appliedCount: 0,
+      totalApplied: 0,
+      formatVersion: SKIN_FORMAT_VERSION,
+      newerFormat: false,
+      skippedKeys: [],
+      errors: [],
+      adjustments: []
+    }
+  }
   var res = inspectKvMap(map, null, "theme-skin", "theme", lookup, [])
   if (res.skin) res.skin.id = "theme-skin"
   return res
@@ -1212,6 +1284,7 @@ function serializeToml(skin, options) {
     "# Barcraft skin. Save as ~/.config/omarchy/bar/skins/<name>.toml,",
     "# or ship in a theme as shell.bar-skin.toml (or [bar-skin] in shell.toml).",
     "[bar-skin]",
+    "format           = " + SKIN_FORMAT_VERSION,
     "name             = " + tomlString(s.name),
     s.description ? "description      = " + tomlString(s.description) : null,
     "mode             = \"" + s.mode + "\"",
@@ -1522,8 +1595,9 @@ function skinToJson(skin) {
   return out
 }
 
-function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard, monitorDrafts) {
+function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard, monitorDrafts, meta) {
   var p = normalizePrefs(prefs)
+  var extra = meta && typeof meta === "object" && !Array.isArray(meta) ? meta : {}
   var out = {
     standard: !!standard,
     skin: slugify(activeSkinId),
@@ -1534,6 +1608,7 @@ function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard
     omarchyMenu: p.omarchyMenu,
     updateCheck: p.updateCheck
   }
+  if (extra.studioButtonPlaced) out.studioButtonPlaced = true
   var mons = {}
   var any = false
   for (var screen in (monitors || {})) {
@@ -1544,7 +1619,11 @@ function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard
     any = true
   }
   if (any) out.monitors = mons
-  if (draft) out.draft = skinToJson(draft)
+  if (draft) {
+    out.draft = skinToJson(draft)
+    var mainHash = sanitizeMd5(extra.draftBaseHash)
+    if (mainHash) out.draftBaseHash = mainHash
+  }
   var mDrafts = {}
   var anyDraft = false
   for (var dScreen in (monitorDrafts || {})) {
@@ -1554,7 +1633,24 @@ function stateToJson(activeSkinId, followTheme, draft, prefs, monitors, standard
     mDrafts[dName] = skinToJson(dSkin)
     anyDraft = true
   }
-  if (anyDraft) out.monitorDrafts = mDrafts
+  if (anyDraft) {
+    out.monitorDrafts = mDrafts
+    var rawHashes = extra.monitorDraftBaseHashes && typeof extra.monitorDraftBaseHashes === "object" && !Array.isArray(extra.monitorDraftBaseHashes)
+      ? extra.monitorDraftBaseHashes : null
+    if (rawHashes) {
+      var mHashes = {}
+      var anyHash = false
+      for (var hScreen in mDrafts) {
+        if (!hasOwn(mDrafts, hScreen)) continue
+        var hVal = sanitizeMd5(rawHashes[hScreen])
+        if (hVal) {
+          mHashes[hScreen] = hVal
+          anyHash = true
+        }
+      }
+      if (anyHash) out.monitorDraftBaseHashes = mHashes
+    }
+  }
   return out
 }
 
@@ -1575,10 +1671,13 @@ function stateFromJson(obj, lookup) {
     activeSkinId: o.skin !== undefined ? slugify(o.skin) : "floating",
     followTheme: parseBool(o.followTheme, true),
     standard: parseBool(o.standard, false),
+    studioButtonPlaced: parseBool(o.studioButtonPlaced, false),
     prefs: normalizePrefs(o),
     monitors: {},
     draft: null,
-    monitorDrafts: {}
+    draftBaseHash: "",
+    monitorDrafts: {},
+    monitorDraftBaseHashes: {}
   }
   var mons = o.monitors && typeof o.monitors === "object" && !Array.isArray(o.monitors) ? o.monitors : {}
   for (var screen in mons) {
@@ -1588,13 +1687,19 @@ function stateFromJson(obj, lookup) {
     state.monitors[name] = id === "theme" ? "theme" : slugify(id)
   }
   state.draft = parseDraftObject(o.draft, state.activeSkinId, lookup)
+  if (state.draft) state.draftBaseHash = sanitizeMd5(o.draftBaseHash)
   var mDrafts = o.monitorDrafts && typeof o.monitorDrafts === "object" && !Array.isArray(o.monitorDrafts) ? o.monitorDrafts : {}
+  var mHashes = o.monitorDraftBaseHashes && typeof o.monitorDraftBaseHashes === "object" && !Array.isArray(o.monitorDraftBaseHashes) ? o.monitorDraftBaseHashes : {}
   for (var dScreen in mDrafts) {
     var dName = sanitizeScreenName(dScreen)
     if (!dName) continue
     var fallback = state.monitors[dName] || state.activeSkinId
     var parsedDraft = parseDraftObject(mDrafts[dScreen], fallback, lookup)
-    if (parsedDraft) state.monitorDrafts[dName] = parsedDraft
+    if (parsedDraft) {
+      state.monitorDrafts[dName] = parsedDraft
+      var dh = sanitizeMd5(mHashes[dScreen])
+      if (dh) state.monitorDraftBaseHashes[dName] = dh
+    }
   }
   return state
 }
@@ -1738,6 +1843,8 @@ if (typeof module !== "undefined") {
     parseFromShellValues: parseFromShellValues,
     inspectShellValues: inspectShellValues,
     RESERVED_SKIN_IDS: RESERVED_SKIN_IDS,
+    SKIN_FORMAT_VERSION: SKIN_FORMAT_VERSION,
+    sanitizeMd5: sanitizeMd5,
     isReservedSkinId: isReservedSkinId,
     WRITE_FILE_SCRIPT: WRITE_FILE_SCRIPT,
     REMOVE_SKIN_FILES_SCRIPT: REMOVE_SKIN_FILES_SCRIPT,

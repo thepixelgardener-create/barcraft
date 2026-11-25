@@ -50,6 +50,7 @@ Item {
   property var barConfig: null
   property var manifest: null
   property bool vertical: false
+  property var ensureStudioButtonFn: null
   // Told by the bar: Omarchy's own background setting (omarchy-bar background).
   property bool barGlassy: false
   property bool barTransparent: false
@@ -59,6 +60,7 @@ Item {
   // Omarchy standard: show Omarchy's own bar look on every screen. Skins,
   // per-monitor choices and drafts stay put for when it goes off again.
   property bool standard: false
+  property bool studioButtonPlaced: false
   readonly property var builtinSkins: SkinParser.builtinSkins()
   readonly property var classicSkins: builtinSkins.filter(function(s) { return s.category !== "wild" })
   readonly property var wildSkins: builtinSkins.filter(function(s) { return s.category === "wild" })
@@ -66,10 +68,14 @@ Item {
   property var skinDiagnostics: []
   property var customSkin: SkinParser.defaultSkin()
   property bool hasCustomDraft: false
+  // MD5 of the on-disk skin file the main draft started from ("" if none/unknown).
+  property string draftBaseHash: ""
   // screen name -> skin id ("theme" for the theme's skin).
   property var monitorSkins: ({})
   // screen name -> unsaved edited/pasted skin object for that screen.
   property var monitorDrafts: ({})
+  // screen name -> MD5 of the on-disk skin file that screen's draft started from.
+  property var monitorDraftBaseHashes: ({})
   // One-step undo checkpoints per target ("" for main skin, or screen name).
   property var pasteUndoSnapshots: ({})
   readonly property bool canUndoPaste: canUndoPasteFor("")
@@ -198,6 +204,36 @@ Item {
   function canUndoPasteFor(screenName) {
     var key = normalizeTarget(screenName)
     return !!(pasteUndoSnapshots && pasteUndoSnapshots[key])
+  }
+
+  function _draftBaseHashFor(screenName) {
+    var name = normalizeTarget(screenName)
+    if (!name) return SkinParser.sanitizeMd5(draftBaseHash)
+    return (monitorDraftBaseHashes && monitorDraftBaseHashes[name])
+      ? SkinParser.sanitizeMd5(monitorDraftBaseHashes[name]) : ""
+  }
+
+  function _setDraftBaseHash(screenName, hash) {
+    var name = normalizeTarget(screenName)
+    var clean = SkinParser.sanitizeMd5(hash)
+    if (!name) {
+      draftBaseHash = clean
+      return
+    }
+    var next = {}
+    for (var k in monitorDraftBaseHashes) next[k] = monitorDraftBaseHashes[k]
+    if (clean) next[name] = clean
+    else delete next[name]
+    monitorDraftBaseHashes = next
+  }
+
+  function _captureDraftBaseHash(screenName) {
+    var target = normalizeTarget(screenName)
+    var baseId = targetBaseId(target)
+    var baseSkin = baseId ? findSkinById(baseId) : null
+    if (!baseSkin || baseSkin.source !== "user") return ""
+    var path = baseSkin.path || skinPath(baseSkin.id)
+    return SkinParser.sanitizeMd5(store.hashForPath(path))
   }
 
   // ---- Finding skins -------------------------------------------------------
@@ -374,6 +410,7 @@ Item {
     standard = false
     activeSkinId = found.id
     hasCustomDraft = false
+    _setDraftBaseHash("", "")
     customSkin = SkinParser.normalizeSkin(found, found.id, found.source)
     if (themeSkin) followTheme = false
     revision++
@@ -396,6 +433,7 @@ Item {
     clearPasteUndo(name)
     _bumpToken(name)
     _setMonitorDraft(name, null)
+    _setDraftBaseHash(name, "")
     if (id) standard = false
     monitorSkins = next
     revision++
@@ -408,7 +446,10 @@ Item {
     _bumpToken("")
     followTheme = !!enabled
     if (followTheme && themeSkin) standard = false
-    if (followTheme && themeSkin) hasCustomDraft = false
+    if (followTheme && themeSkin) {
+      hasCustomDraft = false
+      _setDraftBaseHash("", "")
+    }
     revision++
     persistState()
   }
@@ -452,12 +493,19 @@ Item {
     runCommand(["omarchy-shell", "-q", "osd", "show", payload])
   }
 
+  function notifyMissingStudioButton() {
+    if (!isPrimary) return
+    runCommand(["omarchy-notification-send", "-g", "󰍜", "Barcraft", strings.t("notify.missingButton")])
+  }
+
   // ---- Editing -------------------------------------------------------------
 
   function updateField(key, value, screenName) {
     var target = normalizeTarget(screenName)
     clearPreview()
     standard = false
+    var startingDraft = !hasDraftFor(target)
+    if (startingDraft) _setDraftBaseHash(target, _captureDraftBaseHash(target))
     var base = committedSkinFor(target)
     var next = SkinParser.normalizeSkin(base, base.id, base.source)
     next[key] = value
@@ -533,12 +581,14 @@ Item {
     _bumpToken(target)
     if (target) {
       _setMonitorDraft(target, null)
+      _setDraftBaseHash(target, "")
       revision++
       persistState()
       return
     }
     standard = false
     hasCustomDraft = false
+    _setDraftBaseHash("", "")
     var found = findSkinById(activeSkinId)
     customSkin = SkinParser.normalizeSkin(found || SkinParser.defaultSkin(), activeSkinId, "builtin")
     revision++
@@ -612,7 +662,20 @@ Item {
     toSave.source = "user"
     toSave.path = dest
     var capturedToken = _tokenFor(targetScreen)
-    var expectHash = (target.overwrite && !forceOverwrite) ? store.hashForPath(dest) : ""
+    var expectHash = ""
+    if (target.overwrite && !forceOverwrite) {
+      if (hasDraftFor(targetScreen)) {
+        expectHash = _draftBaseHashFor(targetScreen)
+        if (!expectHash) {
+          return { ok: false, needsConfirm: true, slug: target.slug, conflictName: cleanName }
+        }
+      } else {
+        expectHash = SkinParser.sanitizeMd5(store.hashForPath(dest))
+        if (!expectHash) {
+          return { ok: false, needsConfirm: true, slug: target.slug, conflictName: cleanName }
+        }
+      }
+    }
 
     store.writeFile(dest, SkinParser.serializeToml(toSave), function(ok, code) {
       if (!ok) {
@@ -635,6 +698,7 @@ Item {
       engine.clearPreview()
       engine.clearPasteUndo(targetScreen)
       engine.standard = false
+      engine._setDraftBaseHash(targetScreen, "")
       if (targetScreen) {
         var mons = {}
         for (var k in engine.monitorSkins) mons[k] = engine.monitorSkins[k]
@@ -726,11 +790,13 @@ Item {
       if (engine.activeSkinId === id && !engine.hasCustomDraft && !engine.usingThemeSkin) {
         engine.customSkin = SkinParser.normalizeSkin(victim, id, "custom")
         engine.hasCustomDraft = true
+        engine._setDraftBaseHash("", "")
       }
       engine.userSkins = kept
       var mons = {}
       for (var screen in engine.monitorSkins) {
         if (engine.monitorSkins[screen] !== id) mons[screen] = engine.monitorSkins[screen]
+        else engine._setDraftBaseHash(screen, "")
       }
       engine.monitorSkins = mons
       engine.revision++
@@ -778,15 +844,20 @@ Item {
       return false
     }
     var res = SkinParser.inspectToml(raw, "imported", "custom", function(id) { return engine.findSkinById(id) })
+    if (res.errors && res.errors.length > 0) {
+      notice("status.importError", res.errors[0].message, true)
+      return false
+    }
     if (!res.skin || res.appliedCount === 0) {
-      if (res.errors && res.errors.length > 0) {
-        notice("status.importError", res.errors[0].message, true)
+      if (res.newerFormat && res.skippedKeys && res.skippedKeys.length > 0) {
+        notice("status.importUnsupported", res.skippedKeys.join(", "), true)
       } else {
         notice("status.importFailed", "", true)
       }
       return false
     }
     var skin = res.skin
+    var prevBaseHash = _draftBaseHashFor(target)
     if (target) {
       var prevDraft = monitorDraftFor(target)
       _setPasteUndo(target, {
@@ -794,12 +865,14 @@ Item {
         monitorSkinId: monitorSkins && monitorSkins[target] ? monitorSkins[target] : "",
         hadDraft: prevDraft !== null,
         draftSkin: prevDraft ? SkinParser.normalizeSkin(prevDraft, prevDraft.id, prevDraft.source) : null,
+        draftBaseHash: prevDraft !== null ? prevBaseHash : "",
         standard: standard
       })
       clearPreview()
       _bumpToken(target)
       standard = false
       _setMonitorDraft(target, skin)
+      _setDraftBaseHash(target, "")
     } else {
       var prevSkin = committedSkin
       _setPasteUndo("", {
@@ -808,6 +881,7 @@ Item {
         followTheme: followTheme,
         standard: standard,
         hasCustomDraft: hasCustomDraft,
+        draftBaseHash: hasCustomDraft ? prevBaseHash : "",
         customSkin: prevSkin ? SkinParser.normalizeSkin(prevSkin, prevSkin.id, prevSkin.source) : null
       })
       clearPreview()
@@ -815,14 +889,20 @@ Item {
       standard = false
       customSkin = skin
       hasCustomDraft = true
+      _setDraftBaseHash("", "")
     }
     revision++
     persistState()
-    var firstNote = ""
-    if (res.errors && res.errors.length > 0) firstNote = res.errors[0].message
-    else if (res.adjustments && res.adjustments.length > 0) firstNote = res.adjustments[0].message
-    if (firstNote) notice("status.importedAdjusted", skin.name + " (" + firstNote + ")", false)
-    else notice("status.imported", skin.name, false)
+    if (res.newerFormat) {
+      var fmtNote = (res.skippedKeys && res.skippedKeys.length > 0)
+        ? strings.t("status.skippedNote").replace("%1", res.skippedKeys.join(", "))
+        : strings.t("status.newerFormatNote")
+      notice("status.importedAdjusted", skin.name + " (" + fmtNote + ")", false)
+    } else if (res.adjustments && res.adjustments.length > 0) {
+      notice("status.importedAdjusted", skin.name + " (" + res.adjustments[0].message + ")", false)
+    } else {
+      notice("status.imported", skin.name, false)
+    }
     return true
   }
 
@@ -843,6 +923,7 @@ Item {
       _setMonitorDraft(target, snap.hadDraft && snap.draftSkin
         ? SkinParser.normalizeSkin(snap.draftSkin, snap.draftSkin.id, "custom")
         : null)
+      _setDraftBaseHash(target, snap.hadDraft ? (snap.draftBaseHash || "") : "")
       revision++
       persistState()
       notice("status.pasteUndone", currentName(target), false)
@@ -853,6 +934,7 @@ Item {
     standard = snap.standard
     var missingSaved = !snap.hasCustomDraft && !snap.standard && !(snap.followTheme && themeSkin) && !findSkinById(snap.activeSkinId)
     hasCustomDraft = snap.hasCustomDraft || (missingSaved && !!snap.customSkin)
+    _setDraftBaseHash("", snap.hasCustomDraft ? (snap.draftBaseHash || "") : "")
     if (snap.customSkin) {
       customSkin = SkinParser.normalizeSkin(snap.customSkin, snap.customSkin.id, hasCustomDraft ? "custom" : snap.customSkin.source)
     }
@@ -874,7 +956,12 @@ Item {
   function stateJson() {
     return JSON.stringify(SkinParser.stateToJson(
       activeSkinId, followTheme, hasCustomDraft ? customSkin : null,
-      prefs, monitorSkins, standard, monitorDrafts))
+      prefs, monitorSkins, standard, monitorDrafts,
+      {
+        studioButtonPlaced: studioButtonPlaced,
+        draftBaseHash: hasCustomDraft ? draftBaseHash : "",
+        monitorDraftBaseHashes: monitorDraftBaseHashes
+      }))
   }
 
   function persistState() {
@@ -924,14 +1011,18 @@ Item {
     activeSkinId = st.activeSkinId
     followTheme = st.followTheme
     standard = !!st.standard
+    studioButtonPlaced = !!st.studioButtonPlaced
     prefs = st.prefs
     monitorSkins = st.monitors || ({})
     monitorDrafts = st.monitorDrafts || ({})
+    monitorDraftBaseHashes = st.monitorDraftBaseHashes || ({})
     if (st.draft) {
       customSkin = st.draft
       hasCustomDraft = true
+      draftBaseHash = st.draftBaseHash || ""
     } else {
       hasCustomDraft = false
+      draftBaseHash = ""
     }
     revision++
   }
@@ -941,7 +1032,12 @@ Item {
     if (!block) return
     var st = SkinParser.stateFromJson(block, function(id) { return engine.findSkinById(id) })
     var json = JSON.stringify(SkinParser.stateToJson(
-      st.activeSkinId, st.followTheme, st.draft, st.prefs, st.monitors, st.standard, st.monitorDrafts))
+      st.activeSkinId, st.followTheme, st.draft, st.prefs, st.monitors, st.standard, st.monitorDrafts,
+      {
+        studioButtonPlaced: st.studioButtonPlaced,
+        draftBaseHash: st.draftBaseHash,
+        monitorDraftBaseHashes: st.monitorDraftBaseHashes
+      }))
     if (json === _lastConfigJson) return
     _lastConfigJson = json
     applyState(st)
@@ -960,10 +1056,24 @@ Item {
     if (stateLoaded) return
     if (configBlock) {
       applyConfigBlock()
-    } else if (isPrimary && legacyStateView.loaded) {
-      var raw = legacyStateView.text()
-      if (raw && raw.trim()) {
-        applyLegacyText(raw)
+      if (isPrimary && !studioButtonPlaced && typeof ensureStudioButtonFn === "function") {
+        if (ensureStudioButtonFn(false)) {
+          studioButtonPlaced = true
+          _lastConfigJson = stateJson()
+        }
+      }
+    } else {
+      var hasLegacy = isPrimary && legacyStateView.loaded && !!(legacyStateView.text() || "").trim()
+      if (hasLegacy) {
+        applyLegacyText(legacyStateView.text())
+      }
+      if (isPrimary && typeof ensureStudioButtonFn === "function") {
+        if (ensureStudioButtonFn(false)) {
+          studioButtonPlaced = true
+          if (!hasLegacy) _lastConfigJson = stateJson()
+        }
+      }
+      if (hasLegacy) {
         persistState()
         migrated = true
         runCommand(["mv", "-n", "--", legacyStatePath, legacyStatePath + ".migrated"])
@@ -1221,7 +1331,7 @@ Item {
     }
     var lines = [
       "Barcraft " + (manifest && manifest.version ? manifest.version : "?") + " is the active bar",
-      "Studio widget on the bar: " + (placed ? "yes" : "no (omarchy bar put thepixelgardener.barcraft --section right)"),
+      "Studio widget on the bar: " + (placed ? "yes" : "no (omarchy-shell barcraft restoreButton)"),
       "Settings: shell.json bar.barcraft" + (configBlock ? "" : " (not written yet: still the defaults)") + (migrated ? ", moved from barcraft.toml" : ""),
       "Wearing: " + currentName() + " (" + currentId() + ")" + (standard ? ", Omarchy standard on" : ""),
       "Per-monitor skins: " + (mons.length ? mons.join(", ") : "none"),

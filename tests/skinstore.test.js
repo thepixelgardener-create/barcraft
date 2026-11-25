@@ -99,16 +99,27 @@ function loadEngineHarness(userDir, legacyDir, pendingOps) {
     followTheme: false,
     themeSkin: null,
     activeSkinId: "floating",
+    prefs: P.normalizePrefs({}),
     stateLoaded: true,
     _renamedSkinIds: {},
+    studioButtonPlaced: true,
     hasCustomDraft: false,
+    draftBaseHash: "",
     customSkin: P.defaultSkin(),
     monitorSkins: {},
     monitorDrafts: {},
+    monitorDraftBaseHashes: {},
     pasteUndoSnapshots: {},
     _editTokens: {},
     previewSkin: null,
     previewScreen: "",
+    strings: {
+      t: k => {
+        if (k === "status.skippedNote") return "newer format; skipped: %1"
+        if (k === "status.newerFormatNote") return "newer format"
+        return k
+      }
+    },
     persistDebounce: { restart: () => {} },
     persistState: () => { persists++ },
     notice: (key, arg, isError) => { notices.push({ key, arg, isError }) },
@@ -160,13 +171,19 @@ function loadEngineHarness(userDir, legacyDir, pendingOps) {
       return ctx.findSkinById(ctx.activeSkinId) || P.defaultSkin()
     }
   })
+  Object.defineProperty(ctx, "activeSkin", {
+    get() { return (ctx.previewSkin && ctx.previewScreen === "") ? ctx.previewSkin : ctx.committedSkin }
+  })
   const fns = [
     "normalizeTarget", "_tokenFor", "_bumpToken", "_setMonitorDraft", "_setPasteUndo",
-    "findSkinById", "isUserSkin", "monitorSkinFor", "monitorDraftFor", "committedSkinFor",
+    "_draftBaseHashFor", "_setDraftBaseHash", "_captureDraftBaseHash",
+    "findSkinById", "isUserSkin", "monitorSkinFor", "monitorDraftFor", "hasDraftFor", "committedSkinFor",
+    "standardFor", "currentName",
     "targetBaseId", "isSkinShared", "clearPreview", "clearPasteUndo",
     "builtinIdTaken", "slugForName", "skinPath", "replaceUserSkin",
-    "selectSkin", "selectForScreen", "updateField", "saveUserSkin", "renameUserSkin", "deleteUserSkin",
-    "_migrateRenamedIds"
+    "selectSkin", "selectForScreen", "updateField", "resetTarget", "importText", "undoPaste",
+    "saveUserSkin", "renameUserSkin", "deleteUserSkin",
+    "stateJson", "applyState", "_migrateRenamedIds"
   ]
   vm.runInContext("var engine = this;\n" + fns.map(method).join("\n"), ctx)
   return { ctx, notices, renamedEvents, hashes, getRescans: () => rescans, getPersists: () => persists }
@@ -456,6 +473,168 @@ test("a scan that started before a save never puts back the hash the save replac
   s._scanStartGen = s._hashGen
   s.skinHashes = s._mergeScanHashes({ "/s/foo.toml": md5("edited elsewhere") })
   assert.strictEqual(s.hashForPath("/s/foo.toml"), md5("edited elsewhere"))
+})
+
+test("external edit followed by watcher rescan still blocks silent overwrite on Save", () => {
+  const env = makeTempEnv()
+  try {
+    const file = path.join(env.userDir, "studio-skin.toml")
+    const initial = P.serializeToml(P.normalizeSkin({ id: "studio-skin", name: "Studio Skin", height: 30 }, "studio-skin", "user"))
+    fs.writeFileSync(file, initial, "utf8")
+
+    const h = loadEngineHarness(env.userDir, env.legacyDir)
+    const skin = Object.assign(P.parseToml(initial, "studio-skin", "user"), { id: "studio-skin", path: file })
+    h.ctx.userSkins = [skin]
+    h.ctx.activeSkinId = "studio-skin"
+    h.hashes[file] = md5(initial)
+
+    // User starts editing in Studio (height 30 -> 40); draft captures initial file hash.
+    h.ctx.updateField("height", 40, "")
+    assert.strictEqual(h.ctx.draftBaseHash, md5(initial))
+
+    // External editor saves height 46 AND the watcher rescans (updating live store hash to external).
+    const external = P.serializeToml(P.normalizeSkin({ id: "studio-skin", name: "Studio Skin", height: 46 }, "studio-skin", "user"))
+    fs.writeFileSync(file, external, "utf8")
+    h.hashes[file] = md5(external)
+
+    // Save must still compare against the draft's starting hash and block silent clobber.
+    const res = h.ctx.saveUserSkin("Studio Skin", false, "")
+    assert.strictEqual(res.ok, true)
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.saveChangedExternally")
+    assert.strictEqual(h.ctx.hasCustomDraft, true)
+    assert.strictEqual(h.ctx.committedSkin.height, 40)
+    assert.strictEqual(fs.readFileSync(file, "utf8"), external)
+
+    // Confirmed overwrite writes Studio's version and clears the draft hash.
+    h.ctx.saveUserSkin("Studio Skin", true, "")
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.saved")
+    assert.strictEqual(h.ctx.hasCustomDraft, false)
+    assert.strictEqual(h.ctx.draftBaseHash, "")
+    assert.strictEqual(P.parseToml(fs.readFileSync(file, "utf8"), "studio-skin", "user").height, 40)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("persisted draft survives shell restart and still blocks overwriting a newer external edit", () => {
+  const env = makeTempEnv()
+  try {
+    const file = path.join(env.userDir, "persisted.toml")
+    const initial = P.serializeToml(P.normalizeSkin({ id: "persisted", name: "Persisted", height: 30 }, "persisted", "user"))
+    fs.writeFileSync(file, initial, "utf8")
+
+    // Session 1: edit skin and persist state to shell.json.
+    const h1 = loadEngineHarness(env.userDir, env.legacyDir)
+    const skin1 = Object.assign(P.parseToml(initial, "persisted", "user"), { id: "persisted", path: file })
+    h1.ctx.userSkins = [skin1]
+    h1.ctx.activeSkinId = "persisted"
+    h1.hashes[file] = md5(initial)
+    h1.ctx.updateField("height", 42, "")
+    const persistedJson = JSON.parse(h1.ctx.stateJson())
+    assert.strictEqual(persistedJson.draftBaseHash, md5(initial))
+
+    // External editor changes file while shell restarts.
+    const external = P.serializeToml(P.normalizeSkin({ id: "persisted", name: "Persisted", height: 48 }, "persisted", "user"))
+    fs.writeFileSync(file, external, "utf8")
+
+    // Session 2: fresh engine scans the new external file and reloads persisted shell.json state.
+    const h2 = loadEngineHarness(env.userDir, env.legacyDir)
+    const skin2 = Object.assign(P.parseToml(external, "persisted", "user"), { id: "persisted", path: file })
+    h2.ctx.userSkins = [skin2]
+    h2.hashes[file] = md5(external)
+    h2.ctx.applyState(P.stateFromJson(persistedJson, id => h2.ctx.findSkinById(id)))
+    assert.strictEqual(h2.ctx.draftBaseHash, md5(initial))
+
+    // Save is blocked because disk has external (48), not the draft's base (30).
+    h2.ctx.saveUserSkin("Persisted", false, "")
+    assert.strictEqual(h2.notices[h2.notices.length - 1].key, "status.saveChangedExternally")
+    assert.strictEqual(fs.readFileSync(file, "utf8"), external)
+
+    // Saving under a new name preserves both versions cleanly.
+    const saveAs = h2.ctx.saveUserSkin("Persisted Copy", false, "")
+    assert.strictEqual(saveAs.ok, true)
+    assert.strictEqual(fs.readFileSync(file, "utf8"), external)
+    assert.strictEqual(P.parseToml(fs.readFileSync(path.join(env.userDir, "persisted-copy.toml"), "utf8"), "persisted-copy", "user").height, 42)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("draft restored from 0.7.0 state without a recorded base hash asks before overwriting", () => {
+  const env = makeTempEnv()
+  try {
+    const file = path.join(env.userDir, "legacy-draft.toml")
+    const onDisk = P.serializeToml(P.normalizeSkin({ id: "legacy-draft", name: "Legacy Draft", height: 46 }, "legacy-draft", "user"))
+    fs.writeFileSync(file, onDisk, "utf8")
+
+    const h = loadEngineHarness(env.userDir, env.legacyDir)
+    const skin = Object.assign(P.parseToml(onDisk, "legacy-draft", "user"), { id: "legacy-draft", path: file })
+    h.ctx.userSkins = [skin]
+    h.hashes[file] = md5(onDisk)
+    // 0.7.0 shell.json had no draftBaseHash field.
+    const st = P.stateFromJson({
+      skin: "legacy-draft",
+      draft: { id: "legacy-draft", name: "Legacy Draft", height: 38 }
+    }, id => h.ctx.findSkinById(id))
+    h.ctx.applyState(st)
+    assert.strictEqual(h.ctx.hasCustomDraft, true)
+    assert.strictEqual(h.ctx.draftBaseHash, "")
+
+    // Unconfirmed Save must ask first rather than silently overwriting disk.
+    const first = h.ctx.saveUserSkin("Legacy Draft", false, "")
+    assert.strictEqual(first.ok, false)
+    assert.strictEqual(first.needsConfirm, true)
+    assert.strictEqual(fs.readFileSync(file, "utf8"), onDisk)
+
+    // Confirmed overwrite writes Studio's draft.
+    const confirmed = h.ctx.saveUserSkin("Legacy Draft", true, "")
+    assert.strictEqual(confirmed.ok, true)
+    assert.strictEqual(P.parseToml(fs.readFileSync(file, "utf8"), "legacy-draft", "user").height, 38)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("per-monitor draft blocks external overwrite after rescan, and paste+undo preserves base hash", () => {
+  const env = makeTempEnv()
+  try {
+    const file = path.join(env.userDir, "portrait.toml")
+    const initial = P.serializeToml(P.normalizeSkin({ id: "portrait", name: "Portrait", height: 32 }, "portrait", "user"))
+    fs.writeFileSync(file, initial, "utf8")
+
+    const h = loadEngineHarness(env.userDir, env.legacyDir)
+    const skin = Object.assign(P.parseToml(initial, "portrait", "user"), { id: "portrait", path: file })
+    h.ctx.userSkins = [skin]
+    h.ctx.activeSkinId = "floating"
+    h.ctx.monitorSkins = { "DP-2": "portrait" }
+    h.hashes[file] = md5(initial)
+
+    // Edit DP-2 (exclusive owner of portrait): captures base hash.
+    h.ctx.updateField("height", 44, "DP-2")
+    assert.strictEqual(h.ctx.monitorDraftBaseHashes["DP-2"], md5(initial))
+
+    // Paste another skin named "Portrait" onto DP-2: saving it must ask before overwriting on-disk portrait.toml.
+    assert.strictEqual(h.ctx.importText("[bar-skin]\nname = \"Portrait\"\nheight = 50\n", "DP-2"), true)
+    assert.strictEqual(h.ctx.monitorDraftBaseHashes["DP-2"], undefined)
+    const pasteSave = h.ctx.saveUserSkin("Portrait", false, "DP-2")
+    assert.strictEqual(pasteSave.ok, false)
+    assert.strictEqual(pasteSave.needsConfirm, true)
+
+    // Undo paste restores the earlier draft (height 44) AND its original base hash.
+    assert.strictEqual(h.ctx.undoPaste("DP-2"), true)
+    assert.strictEqual(h.ctx.committedSkinFor("DP-2").height, 44)
+    assert.strictEqual(h.ctx.monitorDraftBaseHashes["DP-2"], md5(initial))
+
+    // External edit + rescan on portrait.toml still blocks DP-2 Save.
+    const external = P.serializeToml(P.normalizeSkin({ id: "portrait", name: "Portrait", height: 36 }, "portrait", "user"))
+    fs.writeFileSync(file, external, "utf8")
+    h.hashes[file] = md5(external)
+    h.ctx.saveUserSkin("Portrait", false, "DP-2")
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.saveChangedExternally")
+    assert.strictEqual(fs.readFileSync(file, "utf8"), external)
+  } finally {
+    cleanupDir(env.root)
+  }
 })
 
 console.log("SkinStore: " + passed + " tests passed")

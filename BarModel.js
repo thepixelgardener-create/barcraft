@@ -674,10 +674,91 @@ function fullscreenOn(toplevels, workspaceId, hasFullscreen, specialWorkspaceNam
   return false
 }
 
+// Barcraft: ensures the Barcraft Studio button sits in `bar.layout` on a
+// genuine first run (when `bar.barcraft` does not exist yet), sets
+// `bar.barcraft.studioButtonPlaced = true`, and never re-adds a button the
+// user later removed or an existing 0.7 user intentionally took off the bar.
+// Pass `{ force: true }` for an explicit `restoreButton` request.
+// Returns the mutated `config` when a change was made, or `null` when nothing
+// needed to change.
+function placeStudioButton(config, id, fallbackLayout, options) {
+  var widgetId = String(id || "").trim()
+  if (!config || typeof config !== "object" || Array.isArray(config) || !widgetId) return null
+  var force = !!(options && options.force)
+  var bar = (config.bar && typeof config.bar === "object" && !Array.isArray(config.bar)) ? config.bar : null
+  var hasBarcraft = !!(bar && bar.barcraft && typeof bar.barcraft === "object" && !Array.isArray(bar.barcraft))
+  var alreadyFlagged = hasBarcraft && bar.barcraft.studioButtonPlaced === true
+
+  function cloneLayout(source) {
+    var out = {}
+    for (var s = 0; s < sections.length; s++) {
+      var name = sections[s]
+      var entries = source && Array.isArray(source[name]) ? source[name] : []
+      var copy = []
+      for (var i = 0; i < entries.length; i++) {
+        var e = entries[i]
+        copy.push(e && typeof e === "object" ? JSON.parse(JSON.stringify(e)) : e)
+      }
+      out[name] = copy
+    }
+    return out
+  }
+
+  function hasWidget(layout) {
+    if (!layout || typeof layout !== "object" || Array.isArray(layout)) return false
+    for (var s = 0; s < sections.length; s++) {
+      var list = layout[sections[s]]
+      if (!Array.isArray(list)) continue
+      for (var i = 0; i < list.length; i++) {
+        if (entryId(list[i]) === widgetId) return true
+      }
+    }
+    return false
+  }
+
+  if (!force) {
+    if (alreadyFlagged) return null
+    if (hasBarcraft) {
+      bar.barcraft.studioButtonPlaced = true
+      return config
+    }
+  }
+
+  if (!bar) {
+    config.bar = {}
+    bar = config.bar
+  }
+
+  var layoutMissing = !bar.layout || typeof bar.layout !== "object" || Array.isArray(bar.layout) || Object.keys(bar.layout).length === 0
+  var alreadyOnBar = !layoutMissing && hasWidget(bar.layout)
+
+  if (force && alreadyOnBar) {
+    if (alreadyFlagged) return null
+    if (!hasBarcraft) bar.barcraft = {}
+    bar.barcraft.studioButtonPlaced = true
+    return config
+  }
+
+  if (layoutMissing) {
+    bar.layout = cloneLayout(fallbackLayout)
+    alreadyOnBar = hasWidget(bar.layout)
+  }
+
+  if (!alreadyOnBar) {
+    if (!Array.isArray(bar.layout.right)) bar.layout.right = []
+    bar.layout.right.push({ id: widgetId })
+  }
+
+  if (!hasBarcraft) bar.barcraft = {}
+  bar.barcraft.studioButtonPlaced = true
+  return config
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     barSizeFor: barSizeFor,
     fullscreenOn: fullscreenOn,
+    placeStudioButton: placeStudioButton,
     centerBesideRight: centerBesideRight,
     cutoutPending: cutoutPending,
     cutoutTop: cutoutTop,

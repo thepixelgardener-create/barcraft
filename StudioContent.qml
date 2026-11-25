@@ -75,6 +75,16 @@ Column {
     for (var i = 0; i < list.length; i++) out.push(list[i].name)
     return out
   }
+  function resetDisconnectedTarget() {
+    if (screenTarget !== "" && screenNames.indexOf(screenTarget) === -1) {
+      screenTarget = ""
+      confirmOverwriteName = ""
+      pendingPreview = ""
+      previewTimer.stop()
+      if (engine) engine.clearPreview()
+    }
+  }
+  onScreenNamesChanged: resetDisconnectedTarget()
   readonly property var palette: engine ? engine.themeColors : ({})
   // Skin tiles, four to a row.
   readonly property real cardWidth: Math.floor((width - Style.spacing.sm * 3) / 4)
@@ -141,7 +151,10 @@ Column {
   }
 
   onPanelOpenChanged: {
-    if (panelOpen) return
+    if (panelOpen) {
+      resetDisconnectedTarget()
+      return
+    }
     keyboardMode = false
     renamingId = ""
     confirmDeleteId = ""
@@ -1058,7 +1071,7 @@ Column {
             Layout.fillWidth: true
             textFormat: Text.PlainText
             text: root.tr("about.meta", "Barcraft %1 · %2 · %3")
-              .arg(root.engine && root.engine.pluginVersion ? root.engine.pluginVersion : "0.7.0")
+              .arg(root.engine && root.engine.pluginVersion ? root.engine.pluginVersion : "0.7.1")
               .arg(root.engine ? root.engine.pluginLicense : "MIT")
               .arg(root.engine ? root.engine.pluginAuthor : "frueh")
             color: root.dimFg

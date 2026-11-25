@@ -5,6 +5,22 @@ All notable changes to Barcraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-25
+
+### Added
+
+- **First-run Studio button placement & `restoreButton` IPC**: Barcraft now places its Studio button in the `right` section on first activation (preserving stock widgets even when `bar.layout` is absent from `shell.json`, and keeping customized layouts untouched on upgrade from 0.7.0 so deliberately removed buttons stay removed). Calling `omarchy-shell barcraft studio` or `omarchy-shell shell toggle thepixelgardener.barcraft` when the button is off the bar now sends a notification naming `omarchy-shell barcraft restoreButton`.
+- **Skin format versioning (`format = 1`)**: TOML exports now include `format = 1` under `[bar-skin]`. Pasting a skin with a higher `format` applies the fields this version understands, reports the skipped keys, and keeps **Undo paste**; unversioned skins from 0.7 and earlier continue to paste cleanly.
+- **`tests/barmodel.test.js`**: added Node regression coverage for `BarModel.fullscreenOn` and first-run Studio button placement, wired into CI.
+
+### Fixed
+
+- **Strict paste validation (correction to 0.7.0 notes)**: 0.7.0's changelog stated that pasting a skin with a typo or unresolved `preset` preserved the current draft, which was not true when another key such as `name` parsed cleanly. **Paste skin** now rejects any hard error (syntax error, unknown key, invalid value, or unresolved `preset`), ignores metadata-only pastes (`name`/`description` alone), and preserves the selected display's draft and undo history untouched while still applying valid out-of-range clamped values with an adjustment notice.
+- **Prevent Save from silently overwriting external edits after a rescan**: drafts now record the MD5 hash of the on-disk skin file they started from (persisted in `bar.barcraft` across restarts) rather than checking against the live post-rescan hash. External edits are blocked both before and after `inotifywait` rescans and across shell restarts; drafts restored from 0.7.0 state without a recorded base hash ask before overwriting.
+- **Synced upstream Omarchy bar (`r8098` → `r8313`)**: brought in Omarchy's updated fullscreen geometry, special-workspace, and scrolling-column checks so a visible bar no longer stops accepting clicks when a fullscreen window sits offscreen or beneath a special workspace.
+- **Unplugging the monitor being edited**: disconnecting the display currently selected in Studio now resets the target back to **Main skin** (clearing stale previews and overwrite confirmations) while preserving that display's saved `monitorSkins` and `monitorDrafts` for when it reconnects.
+- **README accuracy**: updated the built-in skin count from 8 to 9 (adding `Amiga`) and simplified the install command now that Barcraft activates and places its Studio button without the broken `omarchy bar put` step.
+
 ## [0.7.0] - 2026-11-23
 
 ### Added

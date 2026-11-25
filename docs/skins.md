@@ -83,6 +83,7 @@ border-alpha = 0.25
 
 ```toml
 [bar-skin]
+format            = 1                # skin schema version (current: 1)
 name              = "Islands"
 description       = "Separate floating pills for left, center, and right"
 preset            = "islands"        # optional base: any built-in or saved skin id
@@ -125,9 +126,11 @@ hover-edge-px     = 4                # 1 - 16
 accent-hairline   = true
 ```
 
-### Backwards compatibility
+### Backwards & forward compatibility
 
-Skins from earlier Barcraft versions load unchanged: `art = "warcraft"` maps to `runeforge`, a single `contrast` value also drives `surface-tone`, and files in `~/.config/omarchy/bar-skins/` are still discovered alongside `~/.config/omarchy/bar/skins/`.
+- Skins from earlier Barcraft versions (including exports without a `format` line) load unchanged: `art = "warcraft"` maps to `runeforge`, a single `contrast` value also drives `surface-tone`, and files in `~/.config/omarchy/bar-skins/` are still discovered alongside `~/.config/omarchy/bar/skins/`.
+- **Paste skin** is strict for `format = 1` (and unversioned skins): any syntax error, unknown key, invalid value, or unresolved `preset` rejects the paste and leaves the current draft and undo history intact. Out-of-range numbers clamp and report the adjustment.
+- If you paste a skin whose `format` is higher than your Barcraft version supports (e.g. `format = 2`), Barcraft applies the fields it understands, lists the keys it skipped, and keeps **Undo paste**. Skins on disk and in themes stay tolerant and report diagnostics via `omarchy-shell barcraft doctor`.
 
 ---
 

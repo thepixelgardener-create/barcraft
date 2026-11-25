@@ -558,16 +558,26 @@ test("SkinEngine handlers: single-pass scan, per-monitor editing/zones, diagnost
     themeSkin: null,
     activeSkinId: "statusline",
     hasCustomDraft: false,
+    draftBaseHash: "",
+    studioButtonPlaced: true,
     customSkin: P.defaultSkin(),
     monitorSkins: { "DP-2": "child" },
     monitorDrafts: {},
+    monitorDraftBaseHashes: {},
     pasteUndoSnapshots: {},
     _editTokens: {},
     previewSkin: null,
     previewScreen: "",
     vertical: false,
     Style: { bar: { sizeHorizontal: 30, sizeVertical: 28 }, space: x => x, gapsOut: 6 },
-    strings: { t: k => k === "label.standard" ? "Omarchy standard" : k },
+    strings: {
+      t: k => {
+        if (k === "label.standard") return "Omarchy standard"
+        if (k === "status.skippedNote") return "newer format; skipped: %1"
+        if (k === "status.newerFormatNote") return "newer format"
+        return k
+      }
+    },
     persistDebounce: { restart: () => { debounces++ } },
     persistState: () => { persists++ },
     notice: (key, arg, isError) => { notices.push({ key, arg, isError }) },
@@ -581,6 +591,7 @@ test("SkinEngine handlers: single-pass scan, per-monitor editing/zones, diagnost
     legacySkinsDir: ctx.legacySkinsDir,
     builtinSkins: ctx.builtinSkins,
     skinHashes: {},
+    hashForPath: p => (ctx.store.skinHashes && ctx.store.skinHashes[p]) || "",
     lastDiagnostics: [],
     _mergeScanHashes: h => h,
     skinsScanned: (skins, diags) => {
@@ -610,6 +621,7 @@ test("SkinEngine handlers: single-pass scan, per-monitor editing/zones, diagnost
 
   const fns = [
     "normalizeTarget", "_tokenFor", "_bumpToken", "_setMonitorDraft", "_setPasteUndo", "canUndoPasteFor",
+    "_draftBaseHashFor", "_setDraftBaseHash", "_captureDraftBaseHash",
     "findSkinById", "monitorSkinFor", "monitorDraftFor", "hasMonitorSkin", "hasDraftFor",
     "committedSkinFor", "skinForScreen", "standardFor", "targetBaseId", "isSkinShared",
     "barSizePxOf", "edgePxOf", "zoneFor", "chosenIdFor",
@@ -657,12 +669,37 @@ test("SkinEngine handlers: single-pass scan, per-monitor editing/zones, diagnost
   assert.strictEqual(ctx.undoPaste("DP-2"), true)
   assert.strictEqual(ctx.committedSkinFor("DP-2").height, 36)
 
-  // 5) Typo-only paste preserves current draft and reports key + line.
+  // 5) Strict paste: typo or unknown preset alongside valid name preserves current draft and undo history.
   const prevLen = notices.length
-  assert.strictEqual(ctx.importText("[bar-skin]\nheigth = 34\n", "DP-2"), false)
+  assert.strictEqual(ctx.importText("[bar-skin]\nname = \"Broken\"\npreset = \"missing\"\n", "DP-2"), false)
   assert.strictEqual(ctx.committedSkinFor("DP-2").height, 36)
+  assert.strictEqual(ctx.canUndoPasteFor("DP-2"), false)
   assert.strictEqual(notices[prevLen].key, "status.importError")
-  assert.ok(/Line 2/.test(notices[prevLen].arg) && /heigth/.test(notices[prevLen].arg) && /height/.test(notices[prevLen].arg))
+  assert.ok(/Line 3: unknown preset "missing"/.test(notices[prevLen].arg))
+
+  const typoIdx = notices.length
+  assert.strictEqual(ctx.importText("[bar-skin]\nname = \"Typo\"\nheight = 44\nheigth = 34\n", "DP-2"), false)
+  assert.strictEqual(ctx.committedSkinFor("DP-2").height, 36)
+  assert.strictEqual(notices[typoIdx].key, "status.importError")
+  assert.ok(/Line 4/.test(notices[typoIdx].arg) && /heigth/.test(notices[typoIdx].arg) && /height/.test(notices[typoIdx].arg))
+
+  // Metadata-only paste (name + description, no style keys) is rejected cleanly.
+  assert.strictEqual(ctx.importText("[bar-skin]\nname = \"Only Name\"\ndescription = \"Nothing\"\n", "DP-2"), false)
+  assert.strictEqual(ctx.committedSkinFor("DP-2").height, 36)
+
+  // 5b) Newer format (format = 2) applies known fields, warns with skipped keys, and keeps Undo paste.
+  assert.strictEqual(ctx.importText("[bar-skin]\nformat = 2\nname = \"Future\"\nheight = 42\nglow = 0.5\n", "DP-2"), true)
+  assert.strictEqual(ctx.committedSkinFor("DP-2").name, "Future")
+  assert.strictEqual(ctx.committedSkinFor("DP-2").height, 42)
+  assert.strictEqual(ctx.canUndoPasteFor("DP-2"), true)
+  assert.strictEqual(notices[notices.length - 1].key, "status.importedAdjusted")
+  assert.ok(/glow/.test(notices[notices.length - 1].arg))
+  // A subsequent broken paste must leave both the Future draft AND its Undo snapshot untouched.
+  assert.strictEqual(ctx.importText("[bar-skin]\nname = \"Bad\"\npreset = \"nope\"\n", "DP-2"), false)
+  assert.strictEqual(ctx.committedSkinFor("DP-2").name, "Future")
+  assert.strictEqual(ctx.canUndoPasteFor("DP-2"), true)
+  assert.strictEqual(ctx.undoPaste("DP-2"), true)
+  assert.strictEqual(ctx.committedSkinFor("DP-2").height, 36)
 
   // 6) Clamped value paste applies skin and reports the adjustment.
   assert.strictEqual(ctx.importText("[bar-skin]\nname = \"Tall\"\nheight = 999\n", ""), true)
@@ -822,6 +859,107 @@ test("semver comparison and remote manifest version validation", () => {
   assert.strictEqual(P.parseRemoteManifestVersion(badVer, "thepixelgardener.barcraft"), "")
   assert.strictEqual(P.parseRemoteManifestVersion("not json", "thepixelgardener.barcraft"), "")
   assert.strictEqual(P.parseRemoteManifestVersion("x".repeat(20000), "thepixelgardener.barcraft"), "")
+})
+
+test("format version: format = 1 exports round-trip, unversioned 0.7 skins paste, and format > 1 skips unknown keys", () => {
+  const exported = P.serializeToml(P.normalizeSkin({ id: "fmt", name: "Fmt", height: 34 }, "fmt", "user"), { compact: true })
+  assert.ok(/^format\s*=\s*1$/m.test(exported))
+  const rt = P.inspectToml(exported, "imported", "custom")
+  assert.strictEqual(rt.errors.length, 0)
+  assert.strictEqual(rt.formatVersion, 1)
+  assert.strictEqual(rt.newerFormat, false)
+  assert.strictEqual(rt.skin.height, 34)
+
+  // Unversioned 0.7 export still pastes with zero errors.
+  const legacy = P.inspectToml("[bar-skin]\nname = \"Old 0.7\"\nmode = \"islands\"\nheight = 32\n", "imported", "custom")
+  assert.strictEqual(legacy.errors.length, 0)
+  assert.strictEqual(legacy.formatVersion, 1)
+  assert.strictEqual(legacy.skin.mode, "islands")
+
+  // Name + description alone does not count as applied.
+  const metaOnly = P.inspectToml("[bar-skin]\nformat = 1\nname = \"Empty\"\ndescription = \"Desc\"\n", "imported", "custom")
+  assert.strictEqual(metaOnly.skin, null)
+  assert.strictEqual(metaOnly.appliedCount, 0)
+
+  // Invalid format is a hard error.
+  const badFmt = P.inspectToml("[bar-skin]\nformat = 0\nheight = 34\n", "imported", "custom")
+  assert.strictEqual(badFmt.errors.length, 1)
+  assert.strictEqual(badFmt.errors[0].key, "format")
+
+  // Newer format skips unknown keys and unknown enum values while applying known fields.
+  const future = P.inspectToml(
+    "[bar-skin]\nformat = 2\nname = \"Future\"\nheight = 40\nbezel = \"hologram\"\nglow = 0.8\n",
+    "imported", "custom"
+  )
+  assert.strictEqual(future.errors.length, 0)
+  assert.strictEqual(future.newerFormat, true)
+  assert.strictEqual(future.formatVersion, 2)
+  assert.strictEqual(future.skin.height, 40)
+  assert.deepStrictEqual(future.skippedKeys.sort(), ["bezel", "glow"])
+})
+
+test("shell.json state round-trips studioButtonPlaced and draft base hashes", () => {
+  const h1 = "0123456789abcdef0123456789abcdef"
+  const h2 = "fedcba9876543210fedcba9876543210"
+  const draft = P.normalizeSkin({ id: "my-skin", name: "My Skin", height: 40 }, "my-skin", "custom")
+  const mDraft = P.normalizeSkin({ id: "dp2", name: "DP2", height: 44 }, "dp2", "custom")
+  const json = P.stateToJson("my-skin", false, draft, null, { "DP-2": "dp2" }, false, { "DP-2": mDraft }, {
+    studioButtonPlaced: true,
+    draftBaseHash: h1,
+    monitorDraftBaseHashes: { "DP-2": h2, "DP-3": h1, "DP-4": "not-an-md5" }
+  })
+  assert.strictEqual(json.studioButtonPlaced, true)
+  assert.strictEqual(json.draftBaseHash, h1)
+  assert.deepStrictEqual(json.monitorDraftBaseHashes, { "DP-2": h2 })
+
+  const st = P.stateFromJson(JSON.parse(JSON.stringify(json)))
+  assert.strictEqual(st.studioButtonPlaced, true)
+  assert.strictEqual(st.draftBaseHash, h1)
+  assert.deepStrictEqual(st.monitorDraftBaseHashes, { "DP-2": h2 })
+
+  // 0.7.0 state without draftBaseHash or studioButtonPlaced loads cleanly with empty hash / false flag.
+  const legacy = P.stateFromJson({ skin: "my-skin", draft: { name: "My Skin", height: 40 } })
+  assert.strictEqual(legacy.studioButtonPlaced, false)
+  assert.strictEqual(legacy.draftBaseHash, "")
+})
+
+test("StudioContent resets screenTarget when edited monitor disconnects without dropping saved monitor state", () => {
+  const fs = require("fs")
+  const vm = require("vm")
+  const qml = fs.readFileSync(path.join(__dirname, "..", "StudioContent.qml"), "utf8")
+  const m = qml.match(/^  (function resetDisconnectedTarget\(\) \{[\s\S]*?^  \})/m)
+  assert.ok(m, "missing resetDisconnectedTarget in StudioContent.qml")
+  let previewCleared = 0
+  let timerStopped = 0
+  const ctx = vm.createContext({
+    screenTarget: "DP-2",
+    screenNames: ["eDP-1", "DP-2"],
+    confirmOverwriteName: "My Skin",
+    pendingPreview: "islands",
+    previewTimer: { stop: () => { timerStopped++ } },
+    engine: {
+      monitorSkins: { "DP-2": "islands" },
+      monitorDrafts: { "DP-2": { height: 42 } },
+      clearPreview: () => { previewCleared++ }
+    }
+  })
+  vm.runInContext(m[1], ctx)
+
+  // Still connected: stays on DP-2.
+  ctx.resetDisconnectedTarget()
+  assert.strictEqual(ctx.screenTarget, "DP-2")
+  assert.strictEqual(previewCleared, 0)
+
+  // Unplug DP-2: falls back to main skin and clears transient Studio state, keeping DP-2's saved skin & draft.
+  ctx.screenNames = ["eDP-1"]
+  ctx.resetDisconnectedTarget()
+  assert.strictEqual(ctx.screenTarget, "")
+  assert.strictEqual(ctx.confirmOverwriteName, "")
+  assert.strictEqual(ctx.pendingPreview, "")
+  assert.strictEqual(previewCleared, 1)
+  assert.strictEqual(timerStopped, 1)
+  assert.strictEqual(ctx.engine.monitorSkins["DP-2"], "islands")
+  assert.strictEqual(ctx.engine.monitorDrafts["DP-2"].height, 42)
 })
 
 console.log("SkinParser: " + passed + " tests passed")

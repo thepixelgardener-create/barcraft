@@ -721,6 +721,54 @@ Item {
     if (activePopout === owner) activePopout = null
   }
 
+  // Barcraft: stock default layout from Omarchy's shipped shell.json so first-run
+  // button placement never writes a layout that drops stock widgets if bar.layout
+  // is missing from the user's shell.json.
+  FileView {
+    id: stockShellDefaultsFile
+    path: root.omarchyPath ? (root.omarchyPath + "/config/omarchy/shell.json") : ""
+    blockLoading: true
+    watchChanges: false
+    printErrors: false
+  }
+
+  function stockFallbackLayout() {
+    var raw = String(stockShellDefaultsFile.text() || "").trim()
+    if (raw) {
+      try {
+        var parsed = JSON.parse(raw)
+        if (parsed && typeof parsed === "object" && parsed.bar && typeof parsed.bar.layout === "object" && !Array.isArray(parsed.bar.layout)) {
+          return parsed.bar.layout
+        }
+      } catch (e) {}
+    }
+    return {
+      left: [{ id: "omarchy.menu" }, { id: "omarchy.workspaces" }],
+      centerBegin: [],
+      center: [{ id: "omarchy.clock", format: "dddd HH:mm" }],
+      centerEnd: [],
+      tray: [],
+      right: [{ id: "omarchy.audio" }]
+    }
+  }
+
+  function ensureStudioButton(force) {
+    if (!root.shell || typeof root.shell.mutateShellConfig !== "function") return false
+    var fallback = root.stockFallbackLayout()
+    var probe = { bar: JSON.parse(JSON.stringify(Util.isPlainObject(root.barConfig) ? root.barConfig : {})) }
+    if (!BarModel.placeStudioButton(probe, "thepixelgardener.barcraft", fallback, { force: !!force })) {
+      return false
+    }
+    var changed = false
+    root.shell.mutateShellConfig(function(config) {
+      if (BarModel.placeStudioButton(config, "thepixelgardener.barcraft", fallback, { force: !!force })) {
+        changed = true
+      }
+    })
+    if (changed) skin.studioButtonPlaced = true
+    return changed
+  }
+
   // Barcraft: the skin engine every bar surface reads, and the IPC that a
   // keybinding reaches (`omarchy-shell barcraft reveal`).
   SkinEngine {
@@ -731,6 +779,7 @@ Item {
     barConfig: root.barConfig
     manifest: root.manifest
     vertical: root.vertical
+    ensureStudioButtonFn: function(force) { return root.ensureStudioButton(force) }
   }
   // The engine by a name no SkinLook property shadows.
   readonly property var barcraft: skin
@@ -750,6 +799,11 @@ Item {
     function studio(tab: string): void {
       var item = root.findPanelWidget("thepixelgardener.barcraft")
       if (item && typeof item.openTab === "function") item.openTab(tab)
+      else skin.notifyMissingStudioButton()
+    }
+    // Put the Barcraft Studio button back on the bar when removed earlier.
+    function restoreButton(): string {
+      return root.ensureStudioButton(true) ? "restored" : "present"
     }
     // Changes made here show their result in Omarchy's OSD.
     function toggleAutoHide(): void { skin.toggleAutoHide(); skin.announce() }
@@ -1021,7 +1075,10 @@ Item {
 
   function summonBarWidget(pluginId) {
     var item = findPanelWidget(pluginId)
-    if (!item || typeof item.open !== "function") return false
+    if (!item || typeof item.open !== "function") {
+      if (canonicalWidgetId(pluginId) === "thepixelgardener.barcraft") skin.notifyMissingStudioButton()
+      return false
+    }
     item.open()
     return true
   }
