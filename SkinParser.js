@@ -60,7 +60,7 @@ var WRITE_FILE_SCRIPT =
   "  if [ -n \"$expect\" ]; then " +
   "    [ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$expect\" ] || exit 3; " +
   "  fi; " +
-  "  mv -f -- \"$tmp\" \"$dest\" || exit 1; " +
+  "  mv -fT -- \"$tmp\" \"$dest\" || exit 1; " +
   "fi; " +
   "rm -f -- \"$tmp\"; trap - EXIT; " +
   "[ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$want\" ] || exit 1; " +
@@ -468,8 +468,8 @@ function canonicalSkinId(id) {
 
 function sanitizeLabel(text, maxLen) {
   var s = String(text || "")
-    .replace(/[\r\n\t]+/g, " ")
-    .replace(/[\u0000-\u001f\u007f]/g, "")
+    .replace(/[\r\n\t\u2028\u2029]+/g, " ")
+    .replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
     .trim()
   return s.slice(0, maxLen || 48)
 }
@@ -649,10 +649,14 @@ function parseTomlSectionsWithLines(text) {
     }
     var key = kv[1] !== undefined ? kv[1] : kv[2]
     if (isUnsafeKey(key)) continue
+    if ((section === "bar-skin" || section === "") && hasOwn(out[section], key)) {
+      syntaxErrors.push({ line: lineNo, key: key, duplicate: true, message: "Line " + lineNo + ": duplicate key \"" + sanitizeLabel(key, 40) + "\"" })
+      continue
+    }
     var value = parseTomlValue(kv[3])
     if (value === null) {
       if (section === "bar-skin" || section === "") {
-        syntaxErrors.push({ line: lineNo, key: key, message: "Line " + lineNo + ": invalid value for \"" + key + "\"" })
+        syntaxErrors.push({ line: lineNo, key: key, message: "Line " + lineNo + ": invalid value for \"" + sanitizeLabel(key, 40) + "\"" })
       }
       continue
     }
@@ -829,7 +833,9 @@ function tomlString(text) {
     .replace(/"/g, "\\\"")
     .replace(/\r/g, "\\r")
     .replace(/\n/g, "\\n")
-    .replace(/\t/g, "\\t") + "\""
+    .replace(/\t/g, "\\t")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029") + "\""
 }
 
 var KEY_MAP = dict({
@@ -881,27 +887,68 @@ function copySkin(skin) {
 
 // `lookup(id)` resolves `preset = "<skin id>"`, so a theme can name a skin
 // in one line and override only what it wants on top of it.
+var MAX_REPORTED_ERRORS = 20
+var MAX_KEY_SUGGESTIONS = 5
+var MAX_REPORTED_SKIPPED = 8
+
+// Keeps a hostile file or paste from producing thousands of diagnostics, and
+// keeps every message short and free of control characters.
+function capErrors(errors) {
+  var out = []
+  for (var i = 0; i < errors.length && i < MAX_REPORTED_ERRORS; i++) {
+    var e = errors[i]
+    out.push({
+      line: e.line || 0,
+      key: sanitizeLabel(e.key, 40),
+      suggestion: e.suggestion || "",
+      message: sanitizeLabel(e.message, 160)
+    })
+  }
+  if (errors.length > MAX_REPORTED_ERRORS) {
+    out.push({ line: 0, key: "", message: "…and " + (errors.length - MAX_REPORTED_ERRORS) + " more" })
+  }
+  return out
+}
+
+function skippedSummary(keys) {
+  var shown = keys.slice(0, MAX_REPORTED_SKIPPED).join(", ")
+  return keys.length > MAX_REPORTED_SKIPPED ? shown + " +" + (keys.length - MAX_REPORTED_SKIPPED) : shown
+}
+
 function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
-  var errors = Array.isArray(extraErrors) ? extraErrors.slice() : []
+  var tokenErrors = Array.isArray(extraErrors) ? extraErrors : []
+  var errors = []
   var adjustments = []
   var skippedKeys = []
   var appliedCount = 0
   var styleCount = 0
+  var suggestions = 0
   var formatVersion = SKIN_FORMAT_VERSION
+  function skip(key) {
+    var label = sanitizeLabel(key, 32)
+    if (label && skippedKeys.indexOf(label) === -1) skippedKeys.push(label)
+  }
   if (map["format"] !== undefined) {
     var rawFmt = String(map["format"] || "").trim()
     var fmtLine = lineMap && lineMap["format"] ? lineMap["format"] : 0
-    if (!/^[1-9]\d*$/.test(rawFmt)) {
+    if (!/^[1-9]\d{0,5}$/.test(rawFmt)) {
       errors.push({
         line: fmtLine,
         key: "format",
-        message: formatLinePrefix(fmtLine) + "invalid format \"" + rawFmt + "\""
+        message: formatLinePrefix(fmtLine) + "invalid format \"" + sanitizeLabel(rawFmt, 12) + "\""
       })
     } else {
       formatVersion = parseInt(rawFmt, 10)
     }
   }
   var newerFormat = formatVersion > SKIN_FORMAT_VERSION
+  // A newer format may use values or syntax this version cannot read: those
+  // lines are skipped and reported, everything else still applies.
+  for (var t = 0; t < tokenErrors.length; t++) {
+    var te = tokenErrors[t]
+    if (newerFormat) skip(te.key ? te.key : "line " + te.line)
+    else errors.push(te)
+  }
   var base = null
   if (map["preset"] !== undefined) {
     var presetName = String(map["preset"] || "").trim()
@@ -911,12 +958,12 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
       appliedCount++
       styleCount++
     } else if (newerFormat) {
-      skippedKeys.push("preset")
+      skip("preset")
     } else {
       errors.push({
         line: pLine,
         key: "preset",
-        message: formatLinePrefix(pLine) + "unknown preset \"" + presetName + "\""
+        message: formatLinePrefix(pLine) + "unknown preset \"" + sanitizeLabel(presetName, 40) + "\""
       })
     }
   }
@@ -928,15 +975,16 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     var field = hasOwn(KEY_MAP, key) ? KEY_MAP[key] : ""
     if (!field) {
       if (newerFormat) {
-        skippedKeys.push(key)
+        skip(key)
         continue
       }
-      var sug = closestKeySuggestion(key)
+      var sug = suggestions < MAX_KEY_SUGGESTIONS ? closestKeySuggestion(key) : ""
+      suggestions++
       errors.push({
         line: lineNo,
         key: key,
         suggestion: sug,
-        message: formatLinePrefix(lineNo) + "unknown key \"" + key + "\"" + (sug ? " (did you mean \"" + sug + "\"?)" : "")
+        message: formatLinePrefix(lineNo) + "unknown key \"" + sanitizeLabel(key, 40) + "\"" + (sug ? " (did you mean \"" + sug + "\"?)" : "")
       })
       continue
     }
@@ -944,7 +992,7 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     if (newerFormat) {
       var entryErrors = []
       if (!validateRawEntry(key, map[key], lineNo, entryErrors, adjustments)) {
-        skippedKeys.push(key)
+        skip(key)
         continue
       }
     } else if (!validateRawEntry(key, map[key], lineNo, errors, adjustments)) {
@@ -955,17 +1003,27 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     if (key !== "name" && key !== "description" && key !== "id") styleCount++
     if (field === "name") named = true
   }
+  if (newerFormat && skippedKeys.length > 0) {
+    adjustments.push({
+      line: 0,
+      key: "format",
+      message: "format " + formatVersion + " is newer than this Barcraft; skipped: " + skippedSummary(skippedKeys)
+    })
+  }
   if (!named && !base) merged.name = fallbackId
   if (!merged.id) merged.id = fallbackId
-  var skin = styleCount > 0 ? normalizeSkin(merged, fallbackId, source) : null
+  // Files and theme skins load whenever any key applied, as in 0.7. Paste
+  // additionally requires a style key (styleCount); see SkinEngine.importText.
+  var skin = appliedCount > 0 ? normalizeSkin(merged, fallbackId, source) : null
   return {
     skin: skin,
-    appliedCount: styleCount,
-    totalApplied: appliedCount,
+    appliedCount: appliedCount,
+    styleCount: styleCount,
     formatVersion: formatVersion,
     newerFormat: newerFormat,
     skippedKeys: skippedKeys,
-    errors: errors,
+    skippedSummary: skippedSummary(skippedKeys),
+    errors: capErrors(errors),
     adjustments: adjustments
   }
 }
@@ -1003,11 +1061,17 @@ function extractSkinKvMapWithLines(text) {
   var skinLines = lines["bar-skin"] || Object.create(null)
   var hasSkinSection = hasOwn(sections, "bar-skin")
   var k
+  var typoChecks = 0
   for (k in top) {
-    if (hasOwn(KEY_MAP, k) || k === "preset" || k === "format") {
+    var known = hasOwn(KEY_MAP, k) || k === "preset" || k === "format"
+    // Without a [bar-skin] header, other top-level keys are ignored, except
+    // one that is a near-miss of a skin key ("heigth"): that is a typo, and
+    // passing it on lets the strict paste report it.
+    var typo = !known && !hasSkinSection && typoChecks++ < 50 && closestKeySuggestion(k) !== ""
+    if (known || typo) {
       map[k] = top[k]
       lineMap[k] = topLines[k] || 0
-      found = true
+      if (known) found = true
     }
   }
   for (k in skinSec) {
@@ -1038,10 +1102,11 @@ function inspectToml(text, fallbackId, source, lookup) {
     return {
       skin: null,
       appliedCount: 0,
-      totalApplied: 0,
+      styleCount: 0,
       formatVersion: SKIN_FORMAT_VERSION,
       newerFormat: false,
       skippedKeys: [],
+      skippedSummary: "",
       errors: [],
       adjustments: []
     }
@@ -1227,10 +1292,11 @@ function inspectShellValues(shellValues, lookup) {
     return {
       skin: null,
       appliedCount: 0,
-      totalApplied: 0,
+      styleCount: 0,
       formatVersion: SKIN_FORMAT_VERSION,
       newerFormat: false,
       skippedKeys: [],
+      skippedSummary: "",
       errors: [],
       adjustments: []
     }
@@ -1252,10 +1318,11 @@ function inspectShellValues(shellValues, lookup) {
     return {
       skin: null,
       appliedCount: 0,
-      totalApplied: 0,
+      styleCount: 0,
       formatVersion: SKIN_FORMAT_VERSION,
       newerFormat: false,
       skippedKeys: [],
+      skippedSummary: "",
       errors: [],
       adjustments: []
     }

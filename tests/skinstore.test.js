@@ -111,6 +111,8 @@ function loadEngineHarness(userDir, legacyDir, pendingOps) {
     monitorDraftBaseHashes: {},
     pasteUndoSnapshots: {},
     _editTokens: {},
+    _tokenEpoch: 0,
+    _legacyWaits: 0,
     previewSkin: null,
     previewScreen: "",
     strings: {
@@ -632,6 +634,101 @@ test("per-monitor draft blocks external overwrite after rescan, and paste+undo p
     h.ctx.saveUserSkin("Portrait", false, "DP-2")
     assert.strictEqual(h.notices[h.notices.length - 1].key, "status.saveChangedExternally")
     assert.strictEqual(fs.readFileSync(file, "utf8"), external)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+function seedUserSkin(h, file, fields) {
+  const content = P.serializeToml(P.normalizeSkin(Object.assign({ id: "studio-skin", name: "Studio Skin" }, fields), "studio-skin", "user"))
+  fs.writeFileSync(file, content, "utf8")
+  const skin = Object.assign(P.parseToml(content, "studio-skin", "user"), { id: "studio-skin", path: file, source: "user" })
+  h.ctx.userSkins = [skin]
+  h.ctx.activeSkinId = "studio-skin"
+  h.hashes[file] = md5(content)
+  return content
+}
+
+test("saving a draft of a legacy-folder skin writes the new folder without a false conflict", () => {
+  const env = makeTempEnv()
+  try {
+    const h = loadEngineHarness(env.userDir, env.legacyDir)
+    seedUserSkin(h, path.join(env.legacyDir, "studio-skin.toml"), { height: 30 })
+    h.ctx.updateField("height", 40, "")
+    h.ctx.saveUserSkin("Studio Skin", false, "")
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.saved")
+    const saved = path.join(env.userDir, "studio-skin.toml")
+    assert.strictEqual(P.parseToml(fs.readFileSync(saved, "utf8"), "studio-skin", "user").height, 40)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("a draft kept through a slow save starts from the file that save wrote", () => {
+  const env = makeTempEnv()
+  try {
+    const pending = []
+    const h = loadEngineHarness(env.userDir, env.legacyDir, pending)
+    const file = path.join(env.userDir, "studio-skin.toml")
+    seedUserSkin(h, file, { height: 30 })
+    h.ctx.updateField("height", 40, "")
+    h.ctx.saveUserSkin("Studio Skin", false, "")
+    h.ctx.updateField("radius", 9, "")
+    pending.shift()()
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.savedKeptDraft")
+    assert.strictEqual(h.ctx._draftBaseHashFor(""), md5(fs.readFileSync(file, "utf8")))
+    h.ctx.saveUserSkin("Studio Skin", false, "")
+    pending.shift()()
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.saved")
+    assert.strictEqual(P.parseToml(fs.readFileSync(file, "utf8"), "studio-skin", "user").radius, 9)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("renaming the skin a draft started from carries the draft's base to the new file", () => {
+  const env = makeTempEnv()
+  try {
+    const h = loadEngineHarness(env.userDir, env.legacyDir)
+    seedUserSkin(h, path.join(env.userDir, "studio-skin.toml"), { height: 30 })
+    h.ctx.updateField("height", 40, "")
+    const newSlug = h.ctx.renameUserSkin("studio-skin", "Renamed")
+    const newFile = path.join(env.userDir, newSlug + ".toml")
+    assert.strictEqual(h.ctx._draftBaseHashFor(""), md5(fs.readFileSync(newFile, "utf8")))
+    h.ctx.saveUserSkin("Renamed", false, "")
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.saved")
+    assert.strictEqual(P.parseToml(fs.readFileSync(newFile, "utf8"), newSlug, "user").height, 40)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("reloading state from shell.json while a save is in flight keeps the reloaded draft", () => {
+  const env = makeTempEnv()
+  try {
+    const pending = []
+    const h = loadEngineHarness(env.userDir, env.legacyDir, pending)
+    seedUserSkin(h, path.join(env.userDir, "studio-skin.toml"), { height: 30 })
+    h.ctx.updateField("height", 40, "")
+    h.ctx.saveUserSkin("Studio Skin", false, "")
+    const reloaded = P.normalizeSkin({ id: "studio-skin", name: "Studio Skin", height: 48 }, "studio-skin", "custom")
+    h.ctx.applyState({ activeSkinId: "studio-skin", followTheme: false, standard: false, prefs: h.ctx.prefs,
+      monitors: {}, monitorDrafts: {}, monitorDraftBaseHashes: {}, draft: reloaded, draftBaseHash: "" })
+    pending.shift()()
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.savedKeptDraft")
+    assert.strictEqual(h.ctx.hasCustomDraft, true)
+    assert.strictEqual(h.ctx.committedSkin.height, 48)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("skipped keys appear literally in the paste notice", () => {
+  const env = makeTempEnv()
+  try {
+    const h = loadEngineHarness(env.userDir, env.legacyDir)
+    assert.strictEqual(h.ctx.importText("[bar-skin]\nformat = 2\nheight = 34\n\"a$&b\" = 1\n", ""), true)
+    assert.ok(h.notices[h.notices.length - 1].arg.indexOf("a$&b") !== -1)
   } finally {
     cleanupDir(env.root)
   }

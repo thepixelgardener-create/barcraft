@@ -202,4 +202,40 @@ test("placeStudioButton: with flag set and button removed, button stays removed 
   assert.strictEqual(M.placeStudioButton(restored, "thepixelgardener.barcraft", STOCK_LAYOUT, { force: true }), null)
 })
 
+test("placeStudioButton: restore moves a button stranded in the drawer of a tray that is gone", () => {
+  const config = { bar: { barcraft: { studioButtonPlaced: true }, layout: {
+    left: [{ id: "omarchy.menu" }], centerBegin: [], center: [], centerEnd: [],
+    right: [{ id: "omarchy.audio" }], tray: [{ id: "thepixelgardener.barcraft" }]
+  } } }
+  assert.strictEqual(M.studioButtonPlacement(config.bar.layout, "thepixelgardener.barcraft").reachable, false)
+  assert.ok(M.placeStudioButton(config, "thepixelgardener.barcraft", null, { force: true }))
+  assert.deepStrictEqual(config.bar.layout.tray, [])
+  assert.deepStrictEqual(config.bar.layout.right.map(e => e.id), ["omarchy.audio", "thepixelgardener.barcraft"])
+
+  // In the drawer while the tray is on the bar: reachable, left alone.
+  const withTray = { bar: { barcraft: { studioButtonPlaced: true }, layout: {
+    right: [{ id: "omarchy.tray" }], tray: [{ id: "thepixelgardener.barcraft" }]
+  } } }
+  assert.strictEqual(M.placeStudioButton(withTray, "thepixelgardener.barcraft", null, { force: true }), null)
+})
+
+test("placeStudioButton: missing layout without a readable stock layout writes nothing", () => {
+  const config = { bar: { id: "thepixelgardener.barcraft" } }
+  assert.strictEqual(M.placeStudioButton(config, "thepixelgardener.barcraft", () => null), null)
+  assert.strictEqual(config.bar.layout, undefined)
+  assert.strictEqual(config.bar.barcraft, undefined)
+})
+
+test("placeStudioButton: the stock layout is only read when bar.layout is missing", () => {
+  let reads = 0
+  const fallback = () => { reads++; return { right: [{ id: "omarchy.power" }] } }
+  const present = { bar: { layout: { right: [{ id: "omarchy.audio" }] } } }
+  assert.ok(M.placeStudioButton(present, "thepixelgardener.barcraft", fallback))
+  assert.strictEqual(reads, 0)
+  const missing = { bar: {} }
+  assert.ok(M.placeStudioButton(missing, "thepixelgardener.barcraft", fallback))
+  assert.strictEqual(reads, 1)
+  assert.deepStrictEqual(missing.bar.layout.right.map(e => e.id), ["omarchy.power", "thepixelgardener.barcraft"])
+})
+
 console.log("BarModel: " + passed + " tests passed")

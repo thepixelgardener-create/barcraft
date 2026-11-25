@@ -84,6 +84,7 @@ Item {
   property var prefs: SkinParser.defaultPrefs()
   property int revision: 0
   property bool stateLoaded: false
+  property int _legacyWaits: 0
   // Set a moment after the saved state is in, so loading it never counts as
   // the user changing something (blur sync, icon tokens).
   property bool settled: false
@@ -168,9 +169,13 @@ Item {
     return String(screenName || "")
   }
 
+  // Bumped when state is reloaded from shell.json: every pending save then
+  // sees its target as changed.
+  property int _tokenEpoch: 0
+
   function _tokenFor(screenName) {
     var key = normalizeTarget(screenName)
-    return (_editTokens && _editTokens[key]) ? _editTokens[key] : 0
+    return _tokenEpoch + ":" + ((_editTokens && _editTokens[key]) ? _editTokens[key] : 0)
   }
 
   function _bumpToken(screenName) {
@@ -663,7 +668,12 @@ Item {
     toSave.path = dest
     var capturedToken = _tokenFor(targetScreen)
     var expectHash = ""
-    if (target.overwrite && !forceOverwrite) {
+    // A skin from the legacy folder is saved into the new one: there is no
+    // file there to compare against, only one that must not appear meanwhile.
+    var movingFromLegacy = !!(existing && existing.path && existing.path !== dest)
+    if (target.overwrite && !forceOverwrite && movingFromLegacy) {
+      expectHash = "missing"
+    } else if (target.overwrite && !forceOverwrite) {
       if (hasDraftFor(targetScreen)) {
         expectHash = _draftBaseHashFor(targetScreen)
         if (!expectHash) {
@@ -691,6 +701,10 @@ Item {
       // Only clear the target's draft and bind the new skin if the user hasn't
       // edited or switched that target while the write was in flight.
       if (engine._tokenFor(targetScreen) !== capturedToken) {
+        if (engine.hasDraftFor(targetScreen) && engine.targetBaseId(targetScreen) === slug) {
+          engine._setDraftBaseHash(targetScreen, store.hashForPath(dest))
+          persistDebounce.restart()
+        }
         engine.revision++
         engine.notice("status.savedKeptDraft", slug, false)
         return
@@ -733,6 +747,7 @@ Item {
     renamed.path = skinPath(slug)
     var sameFile = oldPath === renamed.path
     var removeOld = (!sameFile && SkinParser.isSafeSkinPath(oldPath, [engine.userSkinsDir, engine.legacySkinsDir])) ? oldPath : ""
+    var oldHash = SkinParser.sanitizeMd5(store.hashForPath(oldPath))
 
     // Write and byte-verify the replacement file on disk and confirm oldPath
     // removal before updating Studio state.
@@ -747,6 +762,17 @@ Item {
         return
       }
       engine.replaceUserSkin(id, renamed)
+      // A draft that started from the old file now starts from the renamed
+      // one, unless the old file had already changed under it.
+      var newHash = store.hashForPath(renamed.path)
+      function carryBase(screen) {
+        var had = engine._draftBaseHashFor(screen)
+        if (had) engine._setDraftBaseHash(screen, had === oldHash ? newHash : "")
+      }
+      if (engine.activeSkinId === id && engine.hasCustomDraft) carryBase("")
+      for (var ds in engine.monitorSkins) {
+        if (engine.monitorSkins[ds] === id && engine.hasDraftFor(ds)) carryBase(ds)
+      }
       if (engine.activeSkinId === id) {
         engine.activeSkinId = slug
         if (!engine.hasCustomDraft) engine.customSkin = renamed
@@ -848,9 +874,10 @@ Item {
       notice("status.importError", res.errors[0].message, true)
       return false
     }
-    if (!res.skin || res.appliedCount === 0) {
+    // A paste has to change the look: a name or description alone is not a skin.
+    if (!res.skin || !(res.styleCount > 0)) {
       if (res.newerFormat && res.skippedKeys && res.skippedKeys.length > 0) {
-        notice("status.importUnsupported", res.skippedKeys.join(", "), true)
+        notice("status.importUnsupported", res.skippedSummary, true)
       } else {
         notice("status.importFailed", "", true)
       }
@@ -894,8 +921,9 @@ Item {
     revision++
     persistState()
     if (res.newerFormat) {
+      var skipped = res.skippedSummary
       var fmtNote = (res.skippedKeys && res.skippedKeys.length > 0)
-        ? strings.t("status.skippedNote").replace("%1", res.skippedKeys.join(", "))
+        ? strings.t("status.skippedNote").replace("%1", function() { return skipped })
         : strings.t("status.newerFormatNote")
       notice("status.importedAdjusted", skin.name + " (" + fmtNote + ")", false)
     } else if (res.adjustments && res.adjustments.length > 0) {
@@ -964,8 +992,16 @@ Item {
       }))
   }
 
+  function _studioButtonChanged(result) {
+    return result === "restored" || result === "flagged"
+  }
+
   function persistState() {
     persistDebounce.stop()
+    if (!stateLoaded) {
+      persistDebounce.restart()
+      return
+    }
     if (!isPrimary || !shellApi || typeof shellApi.mutateShellConfig !== "function") return
     var json = stateJson()
     if (json === _lastConfigJson) return
@@ -1007,6 +1043,7 @@ Item {
   }
 
   function applyState(st) {
+    _tokenEpoch++
     clearPasteUndo()
     activeSkinId = st.activeSkinId
     followTheme = st.followTheme
@@ -1057,18 +1094,22 @@ Item {
     if (configBlock) {
       applyConfigBlock()
       if (isPrimary && !studioButtonPlaced && typeof ensureStudioButtonFn === "function") {
-        if (ensureStudioButtonFn(false)) {
+        if (_studioButtonChanged(ensureStudioButtonFn(false))) {
           studioButtonPlaced = true
           _lastConfigJson = stateJson()
         }
       }
     } else {
+      if (isPrimary && legacyStateView.path && !legacyStateView.settled && _legacyWaits++ < 25) {
+        loadTimer.restart()
+        return
+      }
       var hasLegacy = isPrimary && legacyStateView.loaded && !!(legacyStateView.text() || "").trim()
       if (hasLegacy) {
         applyLegacyText(legacyStateView.text())
       }
       if (isPrimary && typeof ensureStudioButtonFn === "function") {
-        if (ensureStudioButtonFn(false)) {
+        if (_studioButtonChanged(ensureStudioButtonFn(false))) {
           studioButtonPlaced = true
           if (!hasLegacy) _lastConfigJson = stateJson()
         }
@@ -1087,10 +1128,12 @@ Item {
   FileView {
     id: legacyStateView
     property bool loaded: false
+    property bool settled: false
     path: engine.isPrimary ? engine.legacyStatePath : ""
     printErrors: false
     watchChanges: false
-    onLoaded: loaded = true
+    onLoaded: { loaded = true; settled = true }
+    onLoadFailed: settled = true
   }
 
   Timer {

@@ -434,6 +434,14 @@ Item {
       waitForEnd: true
       onStreamFinished: {
         try {
+          // Barcraft wrote or removed a skin while this scan ran, so what it
+          // read may be older than what is on disk. Publishing it would pair
+          // an old skin with the new file's hash and let a later Save
+          // overwrite the newer file. Scan again instead.
+          if (store._hashGen > store._scanStartGen) {
+            Qt.callLater(store.rescan)
+            return
+          }
           var rows = JSON.parse(text || "[]")
           var hashes = {}
           for (var i = 0; i < rows.length; i++) {

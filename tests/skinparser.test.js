@@ -566,6 +566,8 @@ test("SkinEngine handlers: single-pass scan, per-monitor editing/zones, diagnost
     monitorDraftBaseHashes: {},
     pasteUndoSnapshots: {},
     _editTokens: {},
+    _tokenEpoch: 0,
+    _legacyWaits: 0,
     previewSkin: null,
     previewScreen: "",
     vertical: false,
@@ -878,8 +880,9 @@ test("format version: format = 1 exports round-trip, unversioned 0.7 skins paste
 
   // Name + description alone does not count as applied.
   const metaOnly = P.inspectToml("[bar-skin]\nformat = 1\nname = \"Empty\"\ndescription = \"Desc\"\n", "imported", "custom")
-  assert.strictEqual(metaOnly.skin, null)
-  assert.strictEqual(metaOnly.appliedCount, 0)
+  // Loads as a file (as in 0.7), but carries no style key, so paste refuses it.
+  assert.ok(metaOnly.skin)
+  assert.strictEqual(metaOnly.styleCount, 0)
 
   // Invalid format is a hard error.
   const badFmt = P.inspectToml("[bar-skin]\nformat = 0\nheight = 34\n", "imported", "custom")
@@ -960,6 +963,92 @@ test("StudioContent resets screenTarget when edited monitor disconnects without 
   assert.strictEqual(timerStopped, 1)
   assert.strictEqual(ctx.engine.monitorSkins["DP-2"], "islands")
   assert.strictEqual(ctx.engine.monitorDrafts["DP-2"].height, 42)
+})
+
+test("strict paste input: duplicate keys and flat near-miss keys are errors", () => {
+  const dup = P.inspectToml("[bar-skin]\nheight = 42\nheight = 30\n", "imported", "custom")
+  assert.ok(dup.errors.some(e => /duplicate key "height"/.test(e.message)))
+  assert.strictEqual(dup.skin.height, 42)
+
+  const flat = P.inspectToml("height = 42\nheigth = 41\n", "imported", "custom")
+  assert.ok(flat.errors.some(e => e.key === "heigth" && e.suggestion === "height"))
+
+  // Without [bar-skin], unrelated top-level keys (a pasted shell.toml) stay ignored.
+  const shellish = P.inspectToml("height = 42\nfont-family = \"x\"\n", "imported", "custom")
+  assert.strictEqual(shellish.errors.length, 0)
+})
+
+test("newer format skips values and lines this version cannot read", () => {
+  const res = P.inspectToml("[bar-skin]\nformat = 2\nheight = 42\nfuture = [1, 2]\n", "imported", "custom")
+  assert.strictEqual(res.errors.length, 0)
+  assert.strictEqual(res.skin.height, 42)
+  assert.deepStrictEqual(res.skippedKeys, ["future"])
+  assert.ok(res.adjustments.some(a => /skipped: future/.test(a.message)))
+})
+
+test("errors are capped and sanitized so a hostile skin can't flood diagnostics", () => {
+  let text = "[bar-skin]\nheight = 30\n"
+  for (let i = 0; i < 300; i++) text += "junk" + i + " = 1\n"
+  text += "\"evil‮$&\" = 1\n"
+  const res = P.inspectToml(text, "imported", "custom")
+  assert.strictEqual(res.errors.length, 21)
+  assert.ok(/…and 281 more/.test(res.errors[20].message))
+  for (const e of res.errors) assert.ok(e.message.length <= 160)
+
+  const future = P.inspectToml("[bar-skin]\nformat = 2\nheight = 30\n\"a‮b\" = 1\n", "imported", "custom")
+  assert.deepStrictEqual(future.skippedKeys, ["ab"])
+})
+
+test("U+2028/U+2029 in a name survive Copy and Save", () => {
+  const parsed = P.inspectToml("[bar-skin]\nname = \"x\\u2028y\"\nheight = 30\n", "imported", "custom")
+  const out = P.serializeToml(parsed.skin)
+  const back = P.inspectToml(out, "imported", "custom")
+  assert.strictEqual(back.errors.length, 0)
+  assert.ok(back.skin.height === 30)
+  assert.strictEqual(P.sanitizeLabel("a b‮c"), "a bc")
+})
+
+test("files on disk: a name-only skin still loads, newer-format skips reach diagnostics", () => {
+  const dir = "/tmp/barcraft-lib-test"
+  const res = P.parseSkinLibraryDetailed([
+    { path: dir + "/baseline.toml", text: "[bar-skin]\nname = \"Baseline\"\n" },
+    { path: dir + "/future.toml", text: "[bar-skin]\nformat = 3\nheight = 30\nglow = 1\n" }
+  ], [dir])
+  assert.ok(res.skins.some(s => s.id === "baseline"))
+  const diag = res.diagnostics.find(d => d.path === dir + "/future.toml")
+  assert.ok(diag && diag.adjustments.some(a => /skipped: glow/.test(a.message)))
+})
+
+test("StudioContent only honours an overwrite confirmation on the target it was armed for", () => {
+  const fs = require("fs")
+  const vm = require("vm")
+  const qml = fs.readFileSync(path.join(__dirname, "..", "StudioContent.qml"), "utf8")
+  const m = qml.match(/^  (function saveSkin\(\) \{[\s\S]*?^  \})/m)
+  assert.ok(m, "missing saveSkin in StudioContent.qml")
+  const calls = []
+  const ctx = vm.createContext({
+    screenTarget: "",
+    confirmOverwriteName: "Neon",
+    confirmOverwriteTarget: "DP-2",
+    lastSaveName: "",
+    lastSaveTarget: "",
+    nameField: { text: "Neon" },
+    overwriteTimer: { restart() {}, stop() {} },
+    showStatus() {},
+    tr: k => ({ arg: () => k }),
+    engine: {
+      committedSkinFor: () => ({ name: "Neon" }),
+      saveUserSkin: (name, force, target) => { calls.push({ name, force, target }); return { ok: true } }
+    }
+  })
+  vm.runInContext(m[1], ctx)
+  ctx.saveSkin()
+  assert.deepStrictEqual(calls[0], { name: "Neon", force: false, target: "" })
+  ctx.screenTarget = "DP-2"
+  ctx.confirmOverwriteName = "Neon"
+  ctx.confirmOverwriteTarget = "DP-2"
+  ctx.saveSkin()
+  assert.deepStrictEqual(calls[1], { name: "Neon", force: true, target: "DP-2" })
 })
 
 console.log("SkinParser: " + passed + " tests passed")

@@ -41,7 +41,11 @@ Column {
   property string renamingId: ""
   property string confirmDeleteId: ""
   property string confirmOverwriteName: ""
+  // The display an armed overwrite confirmation belongs to: confirming on a
+  // different target must never force-overwrite with that target's skin.
+  property string confirmOverwriteTarget: ""
   property string lastSaveName: ""
+  property string lastSaveTarget: ""
   property string pendingPreview: ""
 
   SkinLook {
@@ -76,6 +80,8 @@ Column {
     return out
   }
   function resetDisconnectedTarget() {
+    // An empty list is a transient state while outputs reconfigure.
+    if (screenNames.length === 0) return
     if (screenTarget !== "" && screenNames.indexOf(screenTarget) === -1) {
       screenTarget = ""
       confirmOverwriteName = ""
@@ -131,8 +137,12 @@ Column {
   Connections {
     target: root.engine
     function onNotice(key, arg, isError) {
-      if (key === "status.saveChangedExternally" && root.lastSaveName !== "") {
+      // Arm the confirmation only while Studio still edits the target that
+      // save came from.
+      if (key === "status.saveChangedExternally" && root.lastSaveName !== ""
+          && root.lastSaveTarget === root.screenTarget) {
         root.confirmOverwriteName = root.lastSaveName
+        root.confirmOverwriteTarget = root.lastSaveTarget
         overwriteTimer.restart()
       }
       root.showStatus(root.tr(key).arg(arg), isError)
@@ -269,10 +279,13 @@ Column {
     var current = engine.committedSkinFor(screenTarget)
     var wanted = nameField.text || (current ? current.name : "")
     var confirmed = confirmOverwriteName !== "" && confirmOverwriteName === wanted
+      && confirmOverwriteTarget === screenTarget
     lastSaveName = wanted
+    lastSaveTarget = screenTarget
     var res = engine.saveUserSkin(wanted, confirmed, screenTarget)
     if (res && res.needsConfirm) {
       confirmOverwriteName = wanted
+      confirmOverwriteTarget = screenTarget
       overwriteTimer.restart()
       showStatus(tr("status.confirmOverwrite").arg(res.conflictName), true)
       return
@@ -464,7 +477,7 @@ Column {
     id: targetBar
     width: parent.width
     spacing: Style.spacing.xs
-    visible: root.screenNames.length > 1 && !!root.engine
+    visible: (root.screenNames.length > 1 || root.screenTarget !== "") && !!root.engine
 
     ChoiceRow {
       navKey: "screens"
@@ -1295,6 +1308,8 @@ Column {
     font.family: Style.font.family
     font.pixelSize: Style.font.caption
     wrapMode: Text.WordWrap
+    maximumLineCount: 3
+    elide: Text.ElideRight
     width: parent.width
   }
 

@@ -721,52 +721,53 @@ Item {
     if (activePopout === owner) activePopout = null
   }
 
-  // Barcraft: stock default layout from Omarchy's shipped shell.json so first-run
-  // button placement never writes a layout that drops stock widgets if bar.layout
-  // is missing from the user's shell.json.
+  // Barcraft: Omarchy's shipped shell.json, read only when first-run placement
+  // finds no bar.layout at all, so the write keeps every stock widget.
   FileView {
     id: stockShellDefaultsFile
-    path: root.omarchyPath ? (root.omarchyPath + "/config/omarchy/shell.json") : ""
-    blockLoading: true
+    path: (root.omarchyPath || "/usr/share/omarchy") + "/config/omarchy/shell.json"
+    preload: false
+    blockAllReads: true
     watchChanges: false
     printErrors: false
   }
 
+  // Omarchy's stock layout, or null when it can't be read: placement then
+  // writes nothing rather than a layout that drops stock widgets.
   function stockFallbackLayout() {
-    var raw = String(stockShellDefaultsFile.text() || "").trim()
-    if (raw) {
-      try {
-        var parsed = JSON.parse(raw)
-        if (parsed && typeof parsed === "object" && parsed.bar && typeof parsed.bar.layout === "object" && !Array.isArray(parsed.bar.layout)) {
-          return parsed.bar.layout
-        }
-      } catch (e) {}
-    }
-    return {
-      left: [{ id: "omarchy.menu" }, { id: "omarchy.workspaces" }],
-      centerBegin: [],
-      center: [{ id: "omarchy.clock", format: "dddd HH:mm" }],
-      centerEnd: [],
-      tray: [],
-      right: [{ id: "omarchy.audio" }]
-    }
+    var raw = ""
+    try {
+      raw = String(stockShellDefaultsFile.text() || "").trim()
+    } catch (e) {}
+    if (!raw) return null
+    try {
+      var parsed = JSON.parse(raw)
+      if (parsed && Util.isPlainObject(parsed.bar) && Util.isPlainObject(parsed.bar.layout)) return parsed.bar.layout
+    } catch (e2) {}
+    console.warn("Barcraft: could not read Omarchy's stock bar layout from " + stockShellDefaultsFile.path)
+    return null
   }
 
+  // Puts the Studio button on the bar when it belongs there (first run, or
+  // `force` for restoreButton). Returns "restored" when it was added or moved,
+  // "flagged" when only the placed marker was recorded, "present" when nothing
+  // needed to change and "error" when shell.json can't be written.
   function ensureStudioButton(force) {
-    if (!root.shell || typeof root.shell.mutateShellConfig !== "function") return false
-    var fallback = root.stockFallbackLayout()
+    if (!root.shell || typeof root.shell.mutateShellConfig !== "function") return "error"
+    var id = "thepixelgardener.barcraft"
+    var options = { force: !!force }
+    var fallback = function() { return root.stockFallbackLayout() }
     var probe = { bar: JSON.parse(JSON.stringify(Util.isPlainObject(root.barConfig) ? root.barConfig : {})) }
-    if (!BarModel.placeStudioButton(probe, "thepixelgardener.barcraft", fallback, { force: !!force })) {
-      return false
-    }
+    var reachableBefore = BarModel.studioButtonPlacement(probe.bar.layout, id).reachable
+    if (!BarModel.placeStudioButton(probe, id, fallback, options)) return "present"
     var changed = false
-    root.shell.mutateShellConfig(function(config) {
-      if (BarModel.placeStudioButton(config, "thepixelgardener.barcraft", fallback, { force: !!force })) {
-        changed = true
-      }
+    var ok = root.shell.mutateShellConfig(function(config) {
+      if (BarModel.placeStudioButton(config, id, fallback, options)) changed = true
     })
-    if (changed) skin.studioButtonPlaced = true
-    return changed
+    if (ok === false) return "error"
+    if (!changed) return "present"
+    skin.studioButtonPlaced = true
+    return reachableBefore ? "flagged" : "restored"
   }
 
   // Barcraft: the skin engine every bar surface reads, and the IPC that a
@@ -803,7 +804,8 @@ Item {
     }
     // Put the Barcraft Studio button back on the bar when removed earlier.
     function restoreButton(): string {
-      return root.ensureStudioButton(true) ? "restored" : "present"
+      var result = root.ensureStudioButton(true)
+      return result === "flagged" ? "present" : result
     }
     // Changes made here show their result in Omarchy's OSD.
     function toggleAutoHide(): void { skin.toggleAutoHide(); skin.announce() }
