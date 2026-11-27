@@ -95,7 +95,7 @@ scripts/sync-upstream.sh                               # 3-way merge Omarchy's b
 | [`SkinStore.qml`](../SkinStore.qml) | Verified atomic file I/O, saved-skin scanning, and `inotifywait` directory watching |
 | [`SkinEngine.qml`](../SkinEngine.qml) | State, per-monitor drafts & saving, live previews, blur sync, clipboard, doctor |
 | [`SkinLook.qml`](../SkinLook.qml) | Resolved colors & geometry (`"auto"` included) per bar surface and thumbnail |
-| [`Bar.qml`](../Bar.qml) | Omarchy's bar with skinned surfaces, auto-hide, widget pills/chips, IPC |
-| [`BarWidget.qml`](../BarWidget.qml), [`StudioContent.qml`](../StudioContent.qml) | Bar pill widget and keyboard-driven Studio panel |
+| [`Bar.qml`](../Bar.qml), [`BarcraftHost.qml`](../BarcraftHost.qml), [`BarAutoHide.qml`](../BarAutoHide.qml), [`SkinSurface.qml`](../SkinSurface.qml) | Omarchy's bar with strip-sized resize-settling surfaces, extracted engine/IPC host, auto-hide sensor, and skinned surfaces |
+| [`BarWidget.qml`](../BarWidget.qml), [`StudioContent.qml`](../StudioContent.qml), [`StudioSkinCard.qml`](../StudioSkinCard.qml) | Bar pill widget, keyboard-driven Studio panel, and skin card tile |
 | [`BarArtLayer.qml`](../BarArtLayer.qml), [`BarBezelOverlay.qml`](../BarBezelOverlay.qml), [`SkinThumbnail.qml`](../SkinThumbnail.qml) | Still art renderer, 3D bezels, and live Studio card previews |
 | [`kit/`](../kit/), [`KitTheme.qml`](../KitTheme.qml), [`LineField.qml`](../LineField.qml) | Vendored Omarchy UI kit, theme bridge, and clipboard-safe line input |

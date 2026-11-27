@@ -5,6 +5,27 @@ All notable changes to Barcraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Unified Copy/Paste in the Studio header & contextual Draft bar**: **Copy** and **Paste** now sit once in the Studio hero header (acting on the selected display across every tab), and a single contextual Draft bar (**Save as skin name…**, **Save**, plus **Undo paste** or **Reset**) appears on every tab—including **Skins**—only while an unsaved edit or paste is active.
+- **Visible theme `[bar-skin]` errors**: when the active theme ships a `[bar-skin]` with validation errors (even if the error prevents it from loading), the **Skins** tab now shows a one-line diagnostic hint with the full list on hover.
+- **Share skins in Studio → About**: a **Share skins** button opens the pinned [Share your skin](https://github.com/thepixelgardener-create/barcraft/issues/4) thread, and **Check updates** / **Update** are now one button that changes with the update state.
+
+### Changed
+
+- **Synced upstream Omarchy bar (`r8313` → `r8442`) & extracted bar helpers**: adopted Omarchy's strip-sized `PanelWindow` and two-frame `frameSwapped` resize-settle state machine (shrinking the `omarchy-bar` Wayland layer surface from full-screen to the bar strip plus floating gap and shadow padding), fixed floating-bar clearance in `thicknessFor()` so panels, popups, notifications, and widget drag removal clear the floating edge gap cleanly, and extracted `BarcraftHost.qml`, `BarAutoHide.qml`, `SkinSurface.qml`, and `StudioSkinCard.qml` to reduce the upstream merge footprint.
+- **Bar stays in view while you edit**: while Studio is open the bar holds its surface at full screen (input still only on the strip), so dragging a size slider or previewing skins no longer blanks the strip on every step; it shrinks back to the strip once Studio closes.
+- **Calmer Colors tab**: moved **Fixed colors** inside the expandable **Custom** drawer so the default view highlights live `theme.<key>` swatches.
+
+### Security
+
+- **Bounded shared-file reads (`READ_FILE_SCRIPT`)**: files over 1 MiB are refused, and reads go through `head -c` so a file that grows after the size check is still bounded.
+- **Eliminated O(N²) unknown-key skip tracking & bounded adjustments**: `inspectKvMap` now deduplicates skipped keys in O(1) via a null-prototype set and caps/sanitizes both `errors` and `adjustments`.
+- **Hardened subprocess pipelines**: added `timeout -k 1 2` SIGKILL fallback for `wl-paste`, `set -o pipefail` + `--connect-timeout 4 --max-redirs 3` on the explicit `curl` update check, `[ ! -L "$dest" ]` guard before `chmod --reference` in `WRITE_FILE_SCRIPT`, and `--` before directory arguments in `inotifywait`.
+- **Safe notice substitution**: replaced `QString.arg()` on 0-arg notices in `StudioContent.qml` with `formatNotice()`, avoiding Qt missing-argument warnings and chained `%1`/`$&` expansion.
+
 ## [0.7.1] - 2026-11-25
 
 ### Added

@@ -11,9 +11,9 @@ The fastest way to build a skin is visually:
 1. Click the Barcraft pill on your bar (or run `omarchy-shell shell toggle thepixelgardener.barcraft`).
 2. Pick a starting preset in **Skins** (hover or move the keyboard cursor to preview live).
 3. Tune **Colors**, **Geometry**, **Surface**, and **Behavior** live on your bar.
-4. Enter a name in the Studio footer and press **Save**.
+4. Once you change something, a draft bar appears at the bottom of Studio. Enter a name there and press **Save**.
    Barcraft writes `~/.config/omarchy/bar/skins/<slug>.toml` and lists it under **Your skins**.
-5. Use **Copy TOML** to share a skin, or **Paste skin** to try one from your clipboard.
+5. Press **Copy** at the top of Studio to share a skin, or **Paste** to try one from your clipboard; **Undo paste** goes back. Shared skins collect in the pinned [Share your skin](https://github.com/thepixelgardener-create/barcraft/issues/4) thread.
 
 ---
 
@@ -129,7 +129,7 @@ accent-hairline   = true
 ### Backwards & forward compatibility
 
 - Skins from earlier Barcraft versions (including exports without a `format` line) load unchanged: `art = "warcraft"` maps to `runeforge`, a single `contrast` value also drives `surface-tone`, and files in `~/.config/omarchy/bar-skins/` are still discovered alongside `~/.config/omarchy/bar/skins/`.
-- **Paste skin** is strict for `format = 1` (and unversioned skins): any syntax error, unknown key, invalid value, or unresolved `preset` rejects the paste and leaves the current draft and undo history intact. Out-of-range numbers clamp and report the adjustment.
+- **Paste** is strict for `format = 1` (and unversioned skins): any syntax error, unknown key, invalid value, or unresolved `preset` rejects the paste and leaves the current draft and undo history intact. Out-of-range numbers clamp and report the adjustment.
 - If you paste a skin whose `format` is higher than your Barcraft version supports (e.g. `format = 2`), Barcraft applies the fields it understands, lists the keys it skipped, and keeps **Undo paste**. Skins on disk and in themes stay tolerant and report diagnostics via `omarchy-shell barcraft doctor`.
 
 ---

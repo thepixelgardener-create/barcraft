@@ -63,7 +63,7 @@ omarchy plugin remove thepixelgardener.barcraft
 
 Every skin is a plain `[bar-skin]` TOML block. You can make one in three ways:
 
-1. **In Barcraft Studio** — pick a starting preset, tweak colors, geometry, surface, or widgets live, then click **Save** (writes `~/.config/omarchy/bar/skins/<name>.toml`) or **Copy TOML** to share.
+1. **In Barcraft Studio** — pick a starting preset, tweak colors, geometry, surface, or widgets live, then click **Save** (writes `~/.config/omarchy/bar/skins/<name>.toml`) or **Copy** at the top of Studio to share it. Post skins in the pinned **[Share your skin](https://github.com/thepixelgardener-create/barcraft/issues/4)** thread; to try one, copy it and press **Paste** in Studio. Your widgets and layout stay, and **Undo paste** goes back.
 2. **As a standalone TOML file** — drop a `.toml` file into `~/.config/omarchy/bar/skins/`. Start from any built-in `preset` and override only what you want:
 
    ```toml

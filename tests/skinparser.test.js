@@ -1037,7 +1037,8 @@ test("StudioContent only honours an overwrite confirmation on the target it was 
     nameField: { text: "Neon" },
     overwriteTimer: { restart() {}, stop() {} },
     showStatus() {},
-    tr: k => ({ arg: () => k }),
+    formatNotice: (t, a) => String(t).replace("%1", () => String(a || "")),
+    tr: k => k,
     engine: {
       committedSkinFor: () => ({ name: "Neon" }),
       saveUserSkin: (name, force, target) => { calls.push({ name, force, target }); return { ok: true } }
@@ -1071,6 +1072,33 @@ test("pinnedScanSlugs collects active, monitor, draft, renamed-reserved, and rec
     "zzz-dp2-draft",
     "real-file"
   ])
+})
+
+test("format=2 with thousands of unknown keys stays O(N) and bounds skippedKeys and adjustments", () => {
+  let text = "[bar-skin]\nformat = 2\nheight = 999\n"
+  for (let i = 0; i < 1500; i++) text += "future_key_" + i + " = 1\n"
+  const t0 = Date.now()
+  const res = P.inspectToml(text, "imported", "custom")
+  const elapsed = Date.now() - t0
+  assert.ok(elapsed < 500, "inspectToml took too long: " + elapsed + "ms")
+  assert.strictEqual(res.errors.length, 0)
+  assert.strictEqual(res.skippedKeys.length, 8)
+  assert.strictEqual(res.skippedCount, 1500)
+  assert.ok(/\+1492$/.test(res.skippedSummary))
+  assert.ok(res.adjustments.length <= 21)
+  for (const a of res.adjustments) assert.ok(a.message.length <= 160)
+})
+
+test("StudioContent formatNotice handles 0-arg strings and literal $&/%1 safely", () => {
+  const fs = require("fs")
+  const vm = require("vm")
+  const qml = fs.readFileSync(path.join(__dirname, "..", "StudioContent.qml"), "utf8")
+  const m = qml.match(/^  (function formatNotice\([\s\S]*?^  \})/m)
+  assert.ok(m, "missing formatNotice in StudioContent.qml")
+  const ctx = vm.createContext({})
+  vm.runInContext(m[1], ctx)
+  assert.strictEqual(ctx.formatNotice("Copied to clipboard", ""), "Copied to clipboard")
+  assert.strictEqual(ctx.formatNotice("Pasted %1", "A $& %2 skin"), "Pasted A $& %2 skin")
 })
 
 console.log("SkinParser: " + passed + " tests passed")

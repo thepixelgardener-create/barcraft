@@ -187,36 +187,37 @@ Column {
     }
   }
 
-  // Fixed colors, the same under every theme.
-  Text {
-    textFormat: Text.PlainText
-    text: root.t("color.creativePalette", "Fixed colors")
-    color: root.dimForeground
-    font.family: Style.font.family
-    font.pixelSize: Style.font.caption
-  }
-
-  Repeater {
-    model: root.chunks(root.curatedSwatches)
-
-    O.SwatchStrip {
-      required property var modelData
-      colors: modelData.items
-      Binding on currentIndex {
-        value: modelData.items.indexOf(root.currentValue)
-      }
-      foreground: root.foreground
-      activeFocusOnTab: false
-      onPicked: function(index) { root.colorPicked(modelData.items[index]) }
-    }
-  }
-
-  // Saturation (x) by value (y), and the hue strip, in the kit's corners and
-  // knobs.
+  // Custom color controls (expanded on demand): fixed swatches plus
+  // saturation/value square and hue strip, keeping the default view focused on
+  // live theme palette references.
   Column {
+    id: customDrawer
     visible: root.pickerExpanded
     width: parent.width
     spacing: Style.spacing.sm
+
+    Text {
+      textFormat: Text.PlainText
+      text: root.t("color.creativePalette", "Fixed colors")
+      color: root.dimForeground
+      font.family: Style.font.family
+      font.pixelSize: Style.font.caption
+    }
+
+    Repeater {
+      model: root.chunks(root.curatedSwatches)
+
+      O.SwatchStrip {
+        required property var modelData
+        colors: modelData.items
+        Binding on currentIndex {
+          value: modelData.items.indexOf(root.currentValue)
+        }
+        foreground: root.foreground
+        activeFocusOnTab: false
+        onPicked: function(index) { root.colorPicked(modelData.items[index]) }
+      }
+    }
 
     readonly property real smallRadius: Math.min(4, Style.cornerRadius)
     readonly property real knob: Math.max(14, Math.round(Style.spacing.controlHeight * 0.38))

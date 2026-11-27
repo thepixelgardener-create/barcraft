@@ -36,6 +36,7 @@ Item {
   readonly property string pluginLicense: manifest && manifest.license ? String(manifest.license) : "MIT"
   readonly property string repositoryUrl: "https://github.com/thepixelgardener-create/barcraft"
   readonly property string issuesUrl: "https://github.com/thepixelgardener-create/barcraft/issues"
+  readonly property string shareSkinsUrl: "https://github.com/thepixelgardener-create/barcraft/issues/4"
   readonly property string remoteManifestUrl: "https://raw.githubusercontent.com/thepixelgardener-create/barcraft/main/manifest.json"
 
   // Explicit user-triggered Barcraft update check state:
@@ -1610,6 +1611,10 @@ Item {
 
   function openIssues() {
     runCommand(["xdg-open", issuesUrl])
+  }
+
+  function openShareSkins() {
+    runCommand(["xdg-open", shareSkinsUrl])
   }
 
   Timer {
