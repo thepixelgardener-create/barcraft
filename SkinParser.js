@@ -51,7 +51,7 @@ var WRITE_FILE_SCRIPT =
   "trap 'rm -f -- \"$tmp\"' EXIT; " +
   "cat > \"$tmp\" || exit 1; " +
   "[ \"$(md5 < \"$tmp\")\" = \"$want\" ] || exit 1; " +
-  "if [ -f \"$dest\" ]; then chmod --reference=\"$dest\" -- \"$tmp\" || exit 1; " +
+  "if [ ! -L \"$dest\" ] && [ -f \"$dest\" ]; then chmod --reference=\"$dest\" -- \"$tmp\" || exit 1; " +
   "else m=$(umask); chmod \"$(printf '%o' $(( 0666 & ~m )))\" -- \"$tmp\" || exit 1; fi; " +
   "if [ \"$mkexec\" = 1 ]; then chmod 0755 -- \"$tmp\" || exit 1; fi; " +
   "if [ \"$expect\" = missing ]; then ln -- \"$tmp\" \"$dest\" 2>/dev/null || exit 3; " +
@@ -99,14 +99,19 @@ var REMOVE_IF_UNCHANGED_SCRIPT =
   "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ \"$(md5sum < \"$p\" | cut -d' ' -f1)\" = \"$h\" ] || exit 3; " +
   "rm -- \"$p\" 2>/dev/null && [ ! -e \"$p\" ] || exit 1"
 
-// Fresh uncached read of a regular non-symlink file.
-// Exit codes: 0 ok (content on stdout), 3 missing, 4 unreadable/symlink/error.
+// Fresh uncached read of a regular non-symlink file (capped at 1 MiB so a
+// huge shared config file can never exhaust shell memory).
+// Exit codes: 0 ok (content on stdout), 3 missing, 4 unreadable/symlink/too large/error.
+var MAX_READ_FILE_BYTES = 1048576
 var READ_FILE_SCRIPT =
   "p=$1; " +
   "[ -n \"$p\" ] || exit 4; " +
   "if [ ! -e \"$p\" ] && [ ! -L \"$p\" ]; then exit 3; fi; " +
   "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ -r \"$p\" ] || exit 4; " +
-  "cat -- \"$p\""
+  "size=$(stat -c %s -- \"$p\" 2>/dev/null || echo " + (MAX_READ_FILE_BYTES + 1) + "); " +
+  "[ \"$size\" -le " + MAX_READ_FILE_BYTES + " ] || exit 4; " +
+  // head, not cat: a file that grows after the size check is still cut off.
+  "head -c " + MAX_READ_FILE_BYTES + " -- \"$p\""
 
 var MAX_SCANNED_SKINS = 200
 
@@ -1004,9 +1009,27 @@ function capErrors(errors) {
   return out
 }
 
-function skippedSummary(keys) {
+function capAdjustments(adjustments) {
+  var out = []
+  for (var i = 0; i < adjustments.length && i < MAX_REPORTED_ERRORS; i++) {
+    var a = adjustments[i]
+    out.push({
+      line: a.line || 0,
+      key: sanitizeLabel(a.key, 40),
+      applied: a.applied,
+      message: sanitizeLabel(a.message, 160)
+    })
+  }
+  if (adjustments.length > MAX_REPORTED_ERRORS) {
+    out.push({ line: 0, key: "", message: "…and " + (adjustments.length - MAX_REPORTED_ERRORS) + " more" })
+  }
+  return out
+}
+
+function skippedSummary(keys, totalCount) {
+  var total = totalCount !== undefined ? Math.max(totalCount, keys.length) : keys.length
   var shown = keys.slice(0, MAX_REPORTED_SKIPPED).join(", ")
-  return keys.length > MAX_REPORTED_SKIPPED ? shown + " +" + (keys.length - MAX_REPORTED_SKIPPED) : shown
+  return total > MAX_REPORTED_SKIPPED ? shown + " +" + (total - MAX_REPORTED_SKIPPED) : shown
 }
 
 function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
@@ -1014,13 +1037,18 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
   var errors = []
   var adjustments = []
   var skippedKeys = []
+  var skippedSet = Object.create(null)
+  var skippedCount = 0
   var appliedCount = 0
   var styleCount = 0
   var suggestions = 0
   var formatVersion = SKIN_FORMAT_VERSION
   function skip(key) {
     var label = sanitizeLabel(key, 32)
-    if (label && skippedKeys.indexOf(label) === -1) skippedKeys.push(label)
+    if (!label || hasOwn(skippedSet, label)) return
+    skippedSet[label] = true
+    skippedCount++
+    if (skippedKeys.length < MAX_REPORTED_SKIPPED) skippedKeys.push(label)
   }
   if (map["format"] !== undefined) {
     var rawFmt = String(map["format"] || "").trim()
@@ -1097,11 +1125,11 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     if (key !== "name" && key !== "description" && key !== "id") styleCount++
     if (field === "name") named = true
   }
-  if (newerFormat && skippedKeys.length > 0) {
+  if (newerFormat && skippedCount > 0) {
     adjustments.push({
       line: 0,
       key: "format",
-      message: "format " + formatVersion + " is newer than this Barcraft; skipped: " + skippedSummary(skippedKeys)
+      message: "format " + formatVersion + " is newer than this Barcraft; skipped: " + skippedSummary(skippedKeys, skippedCount)
     })
   }
   if (!named && !base) merged.name = fallbackId
@@ -1116,9 +1144,10 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     formatVersion: formatVersion,
     newerFormat: newerFormat,
     skippedKeys: skippedKeys,
-    skippedSummary: skippedSummary(skippedKeys),
+    skippedCount: skippedCount,
+    skippedSummary: skippedSummary(skippedKeys, skippedCount),
     errors: capErrors(errors),
-    adjustments: adjustments
+    adjustments: capAdjustments(adjustments)
   }
 }
 

@@ -786,4 +786,28 @@ test("large skin pack past the 200-file limit cannot push pinned active, monitor
   }
 })
 
+test("READ_FILE_SCRIPT rejects files larger than 1 MiB and symlinks", () => {
+  const env = makeTempEnv()
+  try {
+    const big = path.join(env.root, "huge.toml")
+    fs.writeFileSync(big, "a".repeat(1048577), "utf8")
+    const rBig = spawnSync("sh", ["-c", P.READ_FILE_SCRIPT, "sh", big], { encoding: "utf8" })
+    assert.strictEqual(rBig.status, 4)
+    assert.strictEqual(rBig.stdout, "")
+
+    const okFile = path.join(env.root, "ok.toml")
+    fs.writeFileSync(okFile, "hello = 1\n", "utf8")
+    const rOk = spawnSync("sh", ["-c", P.READ_FILE_SCRIPT, "sh", okFile], { encoding: "utf8" })
+    assert.strictEqual(rOk.status, 0)
+    assert.strictEqual(rOk.stdout, "hello = 1\n")
+
+    const link = path.join(env.root, "link.toml")
+    fs.symlinkSync(okFile, link)
+    const rLink = spawnSync("sh", ["-c", P.READ_FILE_SCRIPT, "sh", link], { encoding: "utf8" })
+    assert.strictEqual(rLink.status, 4)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
 console.log("SkinStore: " + passed + " tests passed")

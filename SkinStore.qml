@@ -233,34 +233,34 @@ Item {
       property int exitCode: -1
 
       function start() {
-        proc.running = true
-        watchdog.start()
+        readProc.running = true
+        readWatchdog.start()
       }
 
       function maybeFinish() {
         if (finished || !streamDone || !procExited) return
         finished = true
-        watchdog.stop()
+        readWatchdog.stop()
         var st = exitCode === 0 ? "ok" : (exitCode === 3 ? "missing" : "error")
         if (callback) callback(st, st === "ok" ? captured : "")
         destroy()
       }
 
       Timer {
-        id: watchdog
+        id: readWatchdog
         interval: 8000
         repeat: false
         onTriggered: {
           if (reader.finished) return
           reader.finished = true
-          proc.running = false
+          readProc.running = false
           if (reader.callback) reader.callback("error", "")
           reader.destroy()
         }
       }
 
       Process {
-        id: proc
+        id: readProc
         command: reader.command
         stdout: StdioCollector {
           waitForEnd: true
@@ -386,7 +386,7 @@ Item {
       "command -v inotifywait >/dev/null 2>&1 || exit 127; " +
       "dirs=(); for d in \"$1\" \"$2\" \"$3\" \"$4\"; do [ -n \"$d\" ] && [ -d \"$d\" ] && dirs+=(\"$d\"); done; " +
       "[ \"${#dirs[@]}\" -gt 0 ] || exit 1; " +
-      "exec inotifywait -m -q -e close_write,create,delete,delete_self,move,move_self --format '%w|%e|%f' \"${dirs[@]}\"",
+      "exec inotifywait -m -q -e close_write,create,delete,delete_self,move,move_self --format '%w|%e|%f' -- \"${dirs[@]}\"",
       "barcraft-skins-watch", store.userSkinsDir, store.legacySkinsDir, store.configDir + "/bar", store.configDir]
     onRunningChanged: {
       if (!running) return

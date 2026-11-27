@@ -1526,7 +1526,7 @@ Item {
 
   Process {
     id: fieldPasteProc
-    command: ["sh", "-c", "timeout 2 wl-paste --no-newline --type text 2>/dev/null | head -c 256"]
+    command: ["sh", "-c", "timeout -k 1 2 wl-paste --no-newline --type text 2>/dev/null | head -c 256"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1540,10 +1540,11 @@ Item {
     }
   }
 
-  // Clipboard text, bounded in time and cut off just past the 32 KiB a skin may be.
+  // Clipboard text, bounded in time (with SIGKILL fallback) and cut off just
+  // past the 32 KiB a skin may be.
   Process {
     id: pasteProc
-    command: ["sh", "-c", "timeout 2 wl-paste --no-newline --type text 2>/dev/null | head -c 32769"]
+    command: ["sh", "-c", "timeout -k 1 2 wl-paste --no-newline --type text 2>/dev/null | head -c 32769"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: engine.importText(text, engine._pasteTarget)
@@ -1626,9 +1627,9 @@ Item {
 
   Process {
     id: updateCheckProc
-    command: ["sh", "-c",
-      "curl -fsSL --proto =https --proto-redir =https --tlsv1.2 --max-time 6 --max-filesize 16384 \"$1\" 2>/dev/null | head -c 16385",
-      "sh", engine.remoteManifestUrl]
+    command: ["bash", "-c",
+      "set -o pipefail; curl -fsSL --proto =https --proto-redir =https --tlsv1.2 --connect-timeout 4 --max-redirs 3 --max-time 6 --max-filesize 16384 \"$1\" 2>/dev/null | head -c 16385",
+      "bash", engine.remoteManifestUrl]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
