@@ -2051,24 +2051,30 @@ Item {
         // URLs, so a shared .pragma library gives each its own copy.
         readonly property var barcraftEngine: root.barcraft
 
-        readonly property int activeEdgeOffset: barWindow.effectivelyHidden ? -(barWindow.thickness + barWindow.edgeGap + Style.space(8)) : barWindow.edgeGap
+        // Animate only the edge slide (auto-hide / edge-gap), not barStrip's x/y
+        // directly: when Studio expands or shrinks the layer surface on a bottom
+        // or right bar, parent.height/parent.width jumps and the strip must stay
+        // anchored at its screen edge without sliding across the desktop.
+        property real animatedEdgeOffset: barWindow.effectivelyHidden ? -(barWindow.thickness + barWindow.edgeGap + Style.space(8)) : barWindow.edgeGap
+        Behavior on animatedEdgeOffset {
+          enabled: barWindow.settle === "" && !barWindow.resizeDue
+          NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic }
+        }
         // Along the bar: the room between the side margins, narrowed to the
         // skin's width and centered.
         readonly property real alongRoom: Math.max(0, (root.vertical ? parent.height : parent.width) - barWindow.sideGap * 2)
         readonly property real alongLength: Math.round(alongRoom * pskin.widthPercent / 100)
         readonly property real alongStart: barWindow.sideGap + Math.round((alongRoom - alongLength) / 2)
         x: root.vertical
-          ? (root.position === "right" ? parent.width - barWindow.thickness - activeEdgeOffset : activeEdgeOffset)
+          ? (root.position === "right" ? parent.width - barWindow.thickness - animatedEdgeOffset : animatedEdgeOffset)
           : alongStart
         y: root.vertical
           ? alongStart
-          : (root.position === "bottom" ? parent.height - barWindow.thickness - activeEdgeOffset : activeEdgeOffset)
+          : (root.position === "bottom" ? parent.height - barWindow.thickness - animatedEdgeOffset : animatedEdgeOffset)
         width: root.vertical ? barWindow.thickness : alongLength
         height: root.vertical ? alongLength : barWindow.thickness
         opacity: barWindow.effectivelyHidden ? 0 : 1
 
-        Behavior on x { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
-        Behavior on y { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
         Behavior on opacity { NumberAnimation { duration: Style.duration(140); easing.type: Easing.OutCubic } }
 
         HoverHandler {
@@ -3094,7 +3100,10 @@ Item {
       var w = root.barWidgetRegistry.widgets
       if (customType) return null
       var registryName = root.canonicalWidgetId(moduleName)
-      return w[registryName] ? w[registryName].component : null
+      var comp = w[registryName] ? w[registryName].component : null
+      if (!comp && registryName === "thepixelgardener.barcraft")
+        return barcraftHost.studioWidgetComp || barcraftHost.ensureStudioWidgetComponent()
+      return comp
     }
     readonly property bool qmlCustom: customType === "qml"
     readonly property bool commandCustom: customType === "command"

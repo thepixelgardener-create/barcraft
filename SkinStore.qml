@@ -242,6 +242,8 @@ Item {
         if (finished || !streamDone || !procExited) return
         finished = true
         readWatchdog.stop()
+        // READ_FILE_SCRIPT already rejects files exceeding MAX_READ_FILE_BYTES
+        // in bytes before writing stdout; keep a QML-side guard as well.
         var overflow = exitCode === 0 && captured.length > SkinParser.MAX_READ_FILE_BYTES
         var st = (exitCode === 0 && !overflow) ? "ok" : (exitCode === 3 ? "missing" : "error")
         if (callback) callback(st, st === "ok" ? captured : "")

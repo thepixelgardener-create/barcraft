@@ -41,7 +41,11 @@ Item {
   height: Style.space(52)
 
   Component.onCompleted: if (studio) studio.registerNav(card)
-  Component.onDestruction: if (studio) studio.unregisterNav(card)
+  Component.onDestruction: {
+    if (!studio) return
+    if (studio.renamingId === cardId) studio.finishRename(cardId, "", false)
+    studio.unregisterNav(card)
+  }
 
   onActivate: if (studio) studio.pickSkin(cardId, userSkin)
   onRemove: if (studio && userSkin) studio.requestDelete(cardId, title)

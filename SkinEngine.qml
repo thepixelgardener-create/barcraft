@@ -25,6 +25,7 @@ Item {
   readonly property string userSkinsDir: configDir + "/bar/skins"
   readonly property string legacySkinsDir: configDir + "/bar-skins"
   readonly property string userShellTomlPath: configDir + "/shell.toml"
+  readonly property string userShellJsonPath: configDir + "/shell.json"
   readonly property string menuExtensionPath: configDir + "/extensions/omarchy-menu.jsonc"
   readonly property string updateHookPath: configDir + "/hooks/post-update.d/barcraft-sync"
   readonly property string pluginDir: {
@@ -921,10 +922,15 @@ Item {
 
   // The TOML goes to wl-copy over stdin, never as an argument.
   function copyToml(screenName) {
+    if (standardFor(screenName)) {
+      engine.notice("status.copyStandard", "", true)
+      return false
+    }
     store.runJob(["wl-copy"], exportToml(screenName), function(code) {
       if (code === 0) engine.notice("status.copied", "", false)
       else engine.notice("status.copyFailed", "", true)
     })
+    return true
   }
 
   function copyActiveToml() {
@@ -1168,9 +1174,35 @@ Item {
     applyState(st)
   }
 
+  property bool _pendingLegacyArchive: false
+  property int _legacyArchiveTries: 0
+
+  function _verifyAndArchiveLegacy() {
+    if (!_pendingLegacyArchive || !isPrimary) return
+    if (!store || typeof store.readTextFile !== "function") {
+      _pendingLegacyArchive = false
+      return
+    }
+    store.readTextFile(userShellJsonPath, function(status, text) {
+      if (!engine._pendingLegacyArchive) return
+      if (status === "ok" && SkinParser.shellJsonHasBarcraftState(text)) {
+        engine._pendingLegacyArchive = false
+        engine.migrated = true
+        engine.runCommand(["mv", "-n", "--", engine.legacyStatePath, engine.legacyStatePath + ".migrated"])
+        return
+      }
+      if (engine._legacyArchiveTries < 6) {
+        engine._legacyArchiveTries++
+        legacyArchiveTimer.restart()
+        return
+      }
+      engine._pendingLegacyArchive = false
+    })
+  }
+
   function loadState() {
     if (stateLoaded) return
-    if (configBlock) {
+    if (SkinParser.hasPersistedState(configBlock)) {
       applyConfigBlock()
       if (isPrimary && !studioButtonPlaced && typeof ensureStudioButtonFn === "function") {
         if (_studioButtonChanged(ensureStudioButtonFn(false))) {
@@ -1184,6 +1216,7 @@ Item {
         loadTimer.restart()
         return
       }
+      var alreadyPlaced = !!(configBlock && configBlock.studioButtonPlaced === true)
       var activeLegacyText = isPrimary && legacyStateView.loaded ? String(legacyStateView.text() || "") : ""
       var migratedFallbackText = isPrimary && legacyMigratedView.loaded ? String(legacyMigratedView.text() || "") : ""
       var hasActiveLegacy = !!activeLegacyText.trim()
@@ -1192,7 +1225,8 @@ Item {
       if (hasLegacy) {
         applyLegacyText(hasActiveLegacy ? activeLegacyText : migratedFallbackText)
       }
-      if (isPrimary && typeof ensureStudioButtonFn === "function") {
+      if (alreadyPlaced) studioButtonPlaced = true
+      if (isPrimary && !studioButtonPlaced && typeof ensureStudioButtonFn === "function") {
         if (_studioButtonChanged(ensureStudioButtonFn(false))) {
           studioButtonPlaced = true
           if (!hasLegacy) _lastConfigJson = stateJson()
@@ -1202,9 +1236,12 @@ Item {
       if (hasLegacy) {
         var persisted = persistState()
         if (persisted) {
-          migrated = true
           if (hasActiveLegacy) {
-            runCommand(["mv", "-n", "--", legacyStatePath, legacyStatePath + ".migrated"])
+            _pendingLegacyArchive = true
+            _legacyArchiveTries = 0
+            _verifyAndArchiveLegacy()
+          } else {
+            migrated = true
           }
         }
       }
@@ -1212,6 +1249,13 @@ Item {
     _migrateRenamedIds()
     _rescanIfPinnedMissing()
     settleTimer.restart()
+  }
+
+  Timer {
+    id: legacyArchiveTimer
+    interval: 250
+    repeat: false
+    onTriggered: engine._verifyAndArchiveLegacy()
   }
 
   FileView {

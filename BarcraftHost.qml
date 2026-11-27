@@ -29,6 +29,52 @@ Item {
   // Bumped to peek an auto-hidden bar out on every screen for a moment.
   property int revealSerial: 0
 
+  // Fallback component for our own Studio button: Omarchy r8499's
+  // PluginRegistry.inBar() checks findEntryLocation().kind === "bar", which
+  // returns "bar-option" first for dual-kind bar + bar-widget plugins and
+  // leaves their barWidgetRegistry entry with component: null even when placed
+  // in bar.layout.
+  property var studioWidgetComp: null
+  property var _studioWidgetPending: null
+  function ensureStudioWidgetComponent() {
+    if (studioWidgetComp) return studioWidgetComp
+    if (_studioWidgetPending) return null
+    var comp = Qt.createComponent(Qt.resolvedUrl("BarWidget.qml"))
+    if (comp.status === Component.Ready) {
+      studioWidgetComp = comp
+      return comp
+    }
+    if (comp.status === Component.Loading) {
+      _studioWidgetPending = comp
+      comp.statusChanged.connect(function() {
+        if (comp.status === Component.Ready) {
+          host.studioWidgetComp = comp
+          host._studioWidgetPending = null
+        } else if (comp.status === Component.Error) {
+          console.warn("Barcraft: fallback BarWidget load failed: " + comp.errorString())
+          host._studioWidgetPending = null
+          comp.destroy()
+        }
+      })
+      return null
+    }
+    if (comp.status === Component.Error) {
+      console.warn("Barcraft: fallback BarWidget load failed: " + comp.errorString())
+      comp.destroy()
+    }
+    return null
+  }
+  Component.onDestruction: {
+    if (_studioWidgetPending) {
+      _studioWidgetPending.destroy()
+      _studioWidgetPending = null
+    }
+    if (studioWidgetComp) {
+      studioWidgetComp.destroy()
+      studioWidgetComp = null
+    }
+  }
+
   // Omarchy's shipped shell.json, read only when first-run placement finds no
   // bar.layout at all, so the write keeps every stock widget.
   FileView {

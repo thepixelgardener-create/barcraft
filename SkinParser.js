@@ -43,6 +43,16 @@ function isReservedSkinId(slug, builtinList) {
 var WRITE_FILE_SCRIPT =
   "dest=$1; want=$2; noclobber=$3; mkexec=$4; old=$5; expect=$6; expect_old=$7; " +
   "md5() { md5sum | cut -d' ' -f1; }; " +
+  "rollback() { " +
+  "  if [ \"$noclobber\" = 1 ]; then " +
+  "    if [ ! -e \"$dest\" ] && [ ! -L \"$dest\" ]; then exit \"$1\"; fi; " +
+  "    if [ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$want\" ]; then " +
+  "      rm -f -- \"$dest\" 2>/dev/null; " +
+  "      [ ! -e \"$dest\" ] && exit \"$1\"; " +
+  "    fi; " +
+  "  fi; " +
+  "  exit 4; " +
+  "}; " +
   "[ -n \"$dest\" ] && [ ! -L \"$dest\" ] || exit 1; " +
   "if [ \"$noclobber\" = 1 ] && [ -e \"$dest\" ]; then exit 2; fi; " +
   "if [ -n \"$old\" ] && [ \"$old\" != \"$dest\" ] && [ -n \"$expect_old\" ]; then " +
@@ -68,22 +78,13 @@ var WRITE_FILE_SCRIPT =
   "rm -f -- \"$tmp\"; trap - EXIT; " +
   "[ ! -L \"$dest\" ] && [ -f \"$dest\" ] && [ \"$(md5 < \"$dest\")\" = \"$want\" ] || exit 1; " +
   "if [ -n \"$old\" ] && [ \"$old\" != \"$dest\" ]; then " +
-  "  if [ -L \"$old\" ] || { [ -e \"$old\" ] && [ ! -f \"$old\" ]; }; then " +
-  "    if [ \"$noclobber\" = 1 ]; then rm -f -- \"$dest\" 2>/dev/null; [ ! -e \"$dest\" ] && exit 1 || exit 4; fi; " +
-  "    exit 4; " +
-  "  fi; " +
+  "  if [ -L \"$old\" ] || { [ -e \"$old\" ] && [ ! -f \"$old\" ]; }; then rollback 1; fi; " +
   "  if [ -n \"$expect_old\" ]; then " +
-  "    if [ ! -f \"$old\" ] || [ \"$(md5 < \"$old\")\" != \"$expect_old\" ]; then " +
-  "      if [ \"$noclobber\" = 1 ]; then rm -f -- \"$dest\" 2>/dev/null; [ ! -e \"$dest\" ] && exit 3 || exit 4; fi; " +
-  "      exit 4; " +
-  "    fi; " +
+  "    if [ ! -f \"$old\" ] || [ \"$(md5 < \"$old\")\" != \"$expect_old\" ]; then rollback 3; fi; " +
   "  fi; " +
   "  if [ -f \"$old\" ]; then " +
   "    rm -- \"$old\" 2>/dev/null; " +
-  "    if [ -e \"$old\" ]; then " +
-  "      if [ \"$noclobber\" = 1 ]; then rm -f -- \"$dest\" 2>/dev/null; [ ! -e \"$dest\" ] && exit 1 || exit 4; fi; " +
-  "      exit 4; " +
-  "    fi; " +
+  "    if [ -e \"$old\" ]; then rollback 1; fi; " +
   "  fi; " +
   "fi"
 
@@ -119,9 +120,15 @@ var READ_FILE_SCRIPT =
   "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ -r \"$p\" ] || exit 4; " +
   "size=$(stat -c %s -- \"$p\" 2>/dev/null || echo " + (MAX_READ_FILE_BYTES + 1) + "); " +
   "[ \"$size\" -le " + MAX_READ_FILE_BYTES + " ] || exit 4; " +
-  // Read at most 1 MiB + 1 byte so a file that grows after stat stays bounded
-  // and SkinStore can detect and reject overflow instead of truncating.
-  "head -c " + (MAX_READ_FILE_BYTES + 1) + " -- \"$p\""
+  // Buffer up to 1 MiB + 1 byte in a private temp file and check the actual
+  // byte count before writing stdout, so multi-byte UTF-8 files that grow
+  // past 1 MiB after stat can never return a truncated prefix.
+  "tmp=$(mktemp \"${TMPDIR:-/tmp}/.barcraft-read.XXXXXX\") || exit 4; " +
+  "trap 'rm -f -- \"$tmp\"' EXIT; " +
+  "head -c " + (MAX_READ_FILE_BYTES + 1) + " -- \"$p\" > \"$tmp\" || exit 4; " +
+  "n=$(wc -c < \"$tmp\" 2>/dev/null || echo " + (MAX_READ_FILE_BYTES + 1) + "); " +
+  "[ \"$n\" -le " + MAX_READ_FILE_BYTES + " ] || exit 4; " +
+  "cat -- \"$tmp\""
 
 var MAX_SCANNED_SKINS = 200
 var MAX_SKIN_FILE_BYTES = 32768
@@ -1415,7 +1422,10 @@ function parseSkinLibraryDetailed(rows, allowedDirs, builtinList) {
       })
     }
     var skin = inspected.skin
-    if (!skin) return null
+    if (!skin) {
+      resolved[slug] = null
+      return null
+    }
     skin.id = slug
     skin.source = "user"
     skin.path = entry.path
@@ -1439,7 +1449,7 @@ function parseSkinLibraryDetailed(rows, allowedDirs, builtinList) {
   // old file slug -> id it loads under, for reserved names moved aside.
   var renamed = {}
   for (var oldId in renamedIds) {
-    if (hasOwn(resolved, renamedIds[oldId])) renamed[oldId] = renamedIds[oldId]
+    if (resolved[renamedIds[oldId]]) renamed[oldId] = renamedIds[oldId]
   }
   return { skins: parsed, diagnostics: diagnostics, renamedIds: renamed }
 }
@@ -1997,6 +2007,35 @@ function stateFromJson(obj, lookup) {
   return state
 }
 
+var PERSISTED_STATE_KEYS = [
+  "skin", "followTheme", "standard",
+  "autohideDelay", "autohideWhen", "revealOnWorkspace", "omarchyMenu", "updateCheck",
+  "monitors", "draft", "monitorDrafts"
+]
+
+// True when `bar.barcraft` holds actual persisted Barcraft settings rather than
+// an empty stub or a placement-only `{ studioButtonPlaced: true }` marker.
+function hasPersistedState(block) {
+  if (!block || typeof block !== "object" || Array.isArray(block)) return false
+  for (var i = 0; i < PERSISTED_STATE_KEYS.length; i++) {
+    var k = PERSISTED_STATE_KEYS[i]
+    if (hasOwn(block, k) && block[k] !== undefined) return true
+  }
+  return false
+}
+
+// True when raw `shell.json` text parses cleanly and carries persisted
+// `bar.barcraft` state on disk.
+function shellJsonHasBarcraftState(rawJson) {
+  var text = String(rawJson || "").trim()
+  if (!text) return false
+  var parsed = null
+  try { parsed = JSON.parse(text) } catch (e) { return false }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false
+  if (!parsed.bar || typeof parsed.bar !== "object" || Array.isArray(parsed.bar)) return false
+  return hasPersistedState(parsed.bar.barcraft)
+}
+
 // ---------------------------------------------------------------------------
 // Omarchy's menu takes user entries from ~/.config/omarchy/extensions/
 // omarchy-menu.jsonc. Barcraft's live between two marker comments, so they
@@ -2163,6 +2202,8 @@ if (typeof module !== "undefined") {
     skinToJson: skinToJson,
     stateToJson: stateToJson,
     stateFromJson: stateFromJson,
+    hasPersistedState: hasPersistedState,
+    shellJsonHasBarcraftState: shellJsonHasBarcraftState,
     applyMenuBlock: applyMenuBlock,
     slugify: slugify,
     sanitizeLabel: sanitizeLabel,

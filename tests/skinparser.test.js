@@ -1126,4 +1126,36 @@ test("malformed skin packs and oversized theme bar-skin maps stay bounded during
   for (const e of themeRes.errors) assert.ok(e.message.length <= 160)
 })
 
+test("parseSkinLibraryDetailed diagnoses a broken inherited preset only once and skips failed renames", () => {
+  const dir = "/tmp/barcraft-broken-parent"
+  const rows = [
+    { path: dir + "/broken.toml", text: "[bar-skin]\nheight = \"not-a-number\"\n" },
+    { path: dir + "/standard.toml", text: "[bar-skin]\nbogus_key = 1\n" }
+  ]
+  for (let i = 0; i < 6; i++) {
+    rows.push({
+      path: dir + "/child-" + i + ".toml",
+      text: "[bar-skin]\npreset = \"broken\"\nheight = 34\n"
+    })
+  }
+  const lib = P.parseSkinLibraryDetailed(rows, [dir])
+  const brokenDiags = lib.diagnostics.filter(d => d.path === dir + "/broken.toml")
+  assert.strictEqual(brokenDiags.length, 1, "broken parent should be diagnosed once, got " + brokenDiags.length)
+  assert.strictEqual(lib.renamedIds.standard, undefined, "failed reserved-name file must not enter renamedIds")
+})
+
+test("hasPersistedState and shellJsonHasBarcraftState reject placement-only stubs and invalid JSON", () => {
+  assert.strictEqual(P.hasPersistedState(null), false)
+  assert.strictEqual(P.hasPersistedState({}), false)
+  assert.strictEqual(P.hasPersistedState({ studioButtonPlaced: true }), false)
+  assert.strictEqual(P.hasPersistedState({ skin: "floating" }), true)
+  assert.strictEqual(P.hasPersistedState({ studioButtonPlaced: true, skin: "islands" }), true)
+
+  assert.strictEqual(P.shellJsonHasBarcraftState(""), false)
+  assert.strictEqual(P.shellJsonHasBarcraftState("{not valid json"), false)
+  assert.strictEqual(P.shellJsonHasBarcraftState(JSON.stringify({ version: 1, bar: {} })), false)
+  assert.strictEqual(P.shellJsonHasBarcraftState(JSON.stringify({ version: 1, bar: { barcraft: { studioButtonPlaced: true } } })), false)
+  assert.strictEqual(P.shellJsonHasBarcraftState(JSON.stringify({ version: 1, bar: { barcraft: { studioButtonPlaced: true, skin: "islands" } } })), true)
+})
+
 console.log("SkinParser: " + passed + " tests passed")

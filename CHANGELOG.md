@@ -21,11 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Bounded diagnostic accumulation & theme skin input**: capped `syntaxErrors`, validation `errors`, `adjustments` (20 per file), library diagnostics (50 files), and theme `[bar-skin]` entries (`MAX_THEME_SKIN_KEYS = 100`, 512-char value cap) during parsing so malformed skin packs cannot allocate millions of diagnostic objects.
-- **External-edit protection on Rename**: `renameUserSkin` now checks the scanned file's MD5 hash on both same-file and cross-file renames (`expect` / `expectOld` in `WRITE_FILE_SCRIPT`), refusing or rolling back with a notice instead of overwriting or deleting external edits.
-- **Hardened skin scanner & shared-file reads**: `SCAN_SKINS_SCRIPT` now validates safe basenames before counting toward the 200-file scan quota and hard-bounds reads to `head -c 32769` + `jq` byte-length check so growing files cannot bypass the 32 KiB cap; `READ_FILE_SCRIPT` + `SkinStore.qml` cap reads at 1 MiB and reject overflow instead of silently truncating.
-- **Safe legacy `barcraft.toml` migration**: `loadState()` now confirms `shell.json` persistence before moving `barcraft.toml` to `.migrated` and falls back to `.migrated` if `bar.barcraft` is still absent.
+- **Bounded diagnostic accumulation & theme skin input**: capped `syntaxErrors`, validation `errors`, `adjustments` (20 per file), library diagnostics (50 files, diagnosing broken inherited presets only once), and theme `[bar-skin]` entries (`MAX_THEME_SKIN_KEYS = 100`, 512-char value cap) during parsing so malformed skin packs cannot allocate millions of diagnostic objects.
+- **External-edit protection on Rename**: `renameUserSkin` now checks the scanned file's MD5 hash on both same-file and cross-file renames (`expect` / `expectOld` in `WRITE_FILE_SCRIPT`), refusing or rolling back with a notice instead of overwriting or deleting external edits, and verifying `$dest` still matches our write before any rollback unlink.
+- **Hardened skin scanner & shared-file reads**: `SCAN_SKINS_SCRIPT` now validates safe basenames before counting toward the 200-file scan quota and hard-bounds reads to `head -c 32769` + `jq` byte-length check so growing files cannot bypass the 32 KiB cap; `READ_FILE_SCRIPT` enforces the 1 MiB byte cap in-script before writing stdout so growing multi-byte UTF-8 files can never return a truncated prefix.
+- **Safe legacy `barcraft.toml` migration**: `loadState()` now recovers legacy `barcraft.toml` / `.migrated` even when `bar.barcraft` only holds `{ studioButtonPlaced: true }`, and verifies persisted `bar.barcraft` state has actually landed in `shell.json` on disk before moving `barcraft.toml` to `.migrated`.
 - **Supply-chain & subprocess hardening**: `tools/vendor-kit.js` reads directly from `git show HEAD:<path>` so `kit/` always matches `kit/KIT_REV`; CI workflows pin GitHub Actions to commit SHAs and isolate `issues: write` in a separate checkout-free job; added `timeout -k 1 2` SIGKILL fallback for `wl-paste`, `set -o pipefail` + `--connect-timeout 4 --max-redirs 3` on the explicit `curl` update check, `[ ! -L "$dest" ]` guard before `chmod --reference`, `--` on `inotifywait`, and safe `formatNotice()` substitution.
+
+### Fixed
+
+- **Studio keyboard shortcuts after mouse Save**: clicking **Save**, **Reset**, or **Undo paste** while the skin name field had focus (or closing the Draft bar) now clears field focus and hands keyboard control back to the panel key catcher instead of trapping focus in a hidden input.
+- **Bottom and right bar opening Studio**: `Bar.qml` now animates only the edge-slide offset (`animatedEdgeOffset`) instead of `barStrip`'s `x`/`y`, so expanding or shrinking the layer surface when Studio opens or closes keeps bottom and right bars anchored at their screen edge instead of sliding across the desktop.
+- **Copy disabled in Omarchy standard mode**: **Copy** in the Studio header (and `copyToml`) now refuses to silently export the hidden skin underneath Omarchy standard, showing a clear hint instead.
+- **Shared edits visible when targeting a clean monitor**: changing shared settings (**Icon size**, **Glass blur**) while editing a clean display now surfaces a footer notice with **Edit main** and **Reset** controls so the resulting Main-skin draft isn't hidden.
+- **Accurate theme `[bar-skin]` error overflow count**: the **Skins** tab diagnostic hint now reports the true total error count (`errorCount - 1`) instead of counting the capped display array.
+- **Studio button fallback on Omarchy `r8499+`**: falls back to loading Barcraft's own `BarWidget.qml` when Omarchy's `PluginRegistry.inBar()` returns `false` for dual-kind `bar` + `bar-widget` plugins and leaves the registry entry with `component: null`.
 
 ## [0.7.1] - 2026-11-25
 

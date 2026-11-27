@@ -70,7 +70,7 @@ Column {
   property Item navCurrent: null
   property point lastPointer: Qt.point(-1, -1)
 
-  readonly property bool textEditing: nameField.activeFocus || renamingId !== ""
+  readonly property bool textEditing: (draftControls.visible && nameField.activeFocus) || renamingId !== ""
   readonly property color fg: Kit.Color.popups.text
   readonly property color dimFg: Kit.Color.textDim
   readonly property var screenNames: {
@@ -174,6 +174,7 @@ Column {
       return
     }
     keyboardMode = false
+    if (nameField.activeFocus) nameField.focus = false
     renamingId = ""
     confirmDeleteId = ""
     confirmOverwriteName = ""
@@ -205,10 +206,25 @@ Column {
   readonly property var tabs: ["presets", "colors", "geometry", "surface", "behavior"]
   readonly property bool hasUnsavedDraft: !!root.engine && (root.engine.revision,
     root.engine.hasDraftFor(root.screenTarget) || root.engine.canUndoPasteFor(root.screenTarget))
+  readonly property bool hasMainUnsavedDraft: !!root.engine && (root.engine.revision,
+    root.engine.hasDraftFor("") || root.engine.canUndoPasteFor(""))
+  readonly property bool hasOtherMainDraft: root.screenTarget !== "" && !root.hasUnsavedDraft && root.hasMainUnsavedDraft
   readonly property bool canUndoPasteHere: !!root.engine && (root.engine.revision,
     root.engine.canUndoPasteFor(root.screenTarget))
+  readonly property bool mainCanUndoPaste: !!root.engine && (root.engine.revision,
+    root.engine.canUndoPasteFor(""))
   readonly property var themeSkinErrors: root.engine && root.engine.themeSkinInspection
     && root.engine.themeSkinInspection.errors ? root.engine.themeSkinInspection.errors : []
+  readonly property int themeSkinErrorCount: root.engine && root.engine.themeSkinInspection
+    ? Math.max(themeSkinErrors.length, Number(root.engine.themeSkinInspection.errorCount) || 0) : 0
+
+  function selectScreenTarget(target) {
+    root.screenTarget = target
+    root.confirmOverwriteName = ""
+    root.confirmOverwriteTarget = ""
+    root.pendingPreview = ""
+    previewTimer.restart()
+  }
 
   function setTab(tab) {
     if (activeTab === tab || tabs.indexOf(tab) < 0) return
@@ -311,6 +327,10 @@ Column {
     confirmOverwriteTarget = ""
     overwriteTimer.stop()
     nameField.text = ""
+    if (nameField.activeFocus) {
+      nameField.focus = false
+      restoreKeys()
+    }
   }
 
   function restoreKeys() {
@@ -407,7 +427,7 @@ Column {
 
   function navActivate() {
     keyboardMode = true
-    if (navCurrent && navCurrent.visible) navCurrent.activate()
+    if (navCurrent && navCurrent.visible && navCurrent.navEnabled) navCurrent.activate()
     else navMove(0, 1)
   }
 
@@ -467,9 +487,13 @@ Column {
           navKey: "copyHero"
           inHeader: true
           navGrid: true
+          readonly property bool isStandard: !!root.engine && (root.engine.revision, root.engine.standardFor(root.screenTarget))
+          disabled: isStandard
           text: root.tr("action.copy", "Copy")
           iconText: "󰆏"
-          tooltipText: root.tr("tooltip.copyToml", "Copy the active skin as [bar-skin] TOML")
+          tooltipText: isStandard
+            ? root.tr("tooltip.copyStandard", "Switch off Omarchy standard to copy a skin")
+            : root.tr("tooltip.copyToml", "Copy the active skin as [bar-skin] TOML")
           onTriggered: if (root.engine) root.engine.copyToml(root.screenTarget)
         }
 
@@ -534,11 +558,7 @@ Column {
         return out
       }
       onPicked: function(v) {
-        root.screenTarget = v === "*main*" ? "" : v
-        root.confirmOverwriteName = ""
-        root.confirmOverwriteTarget = ""
-        root.pendingPreview = ""
-        previewTimer.restart()
+        root.selectScreenTarget(v === "*main*" ? "" : v)
       }
     }
 
@@ -646,10 +666,11 @@ Column {
             var errs = root.themeSkinErrors
             if (errs.length === 0) return ""
             var first = errs[0].message || ""
+            var total = Math.max(errs.length, root.themeSkinErrorCount)
             // %2 first: the message itself may contain "%2".
-            return errs.length > 1
+            return total > 1
               ? root.formatNotice(root.tr("hint.themeSkinErrorMore", "Theme [bar-skin]: %1 (+%2 more)")
-                  .replace("%2", function() { return String(errs.length - 1) }), first)
+                  .replace("%2", function() { return String(total - 1) }), first)
               : root.formatNotice(root.tr("hint.themeSkinError", "Theme [bar-skin]: %1"), first)
           }
           color: Kit.Color.urgent
@@ -1242,119 +1263,179 @@ Column {
     id: footer
     width: parent.width
     spacing: Style.spacing.sm
-    visible: root.hasUnsavedDraft
+    visible: root.hasUnsavedDraft || root.hasOtherMainDraft
 
     O.PanelSeparator {
       width: parent.width
       foreground: root.fg
     }
 
-    RowLayout {
+    Column {
+      id: draftControls
       width: parent.width
       spacing: Style.spacing.sm
-
-      NavItem {
-        id: nameNav
-        navKey: "skinName"
-        inFooter: true
-        Layout.fillWidth: true
-        implicitHeight: Style.spacing.controlHeight
-        Layout.preferredHeight: implicitHeight
-        onActivate: nameField.forceActiveFocus()
-        onTextKey: function(t) {
-          nameField.forceActiveFocus()
-          nameField.insert(nameField.length, t)
+      visible: root.hasUnsavedDraft
+      onVisibleChanged: {
+        if (!visible && nameField.activeFocus) {
+          nameField.focus = false
+          root.restoreKeys()
         }
+      }
 
-        // The kit's field chrome around a LineField (see LineField.qml).
-        O.BorderSurface {
-          anchors.fill: parent
-          radius: Style.cornerRadius
-          color: Style.normalFillFor(root.fg, Kit.Color.accent)
-          borderSpec: Border.controlSpec(nameField.activeFocus ? "focus" : (nameNav.navFocused || nameHover.hovered ? "hover-cursor" : "normal"), root.fg, Kit.Color.accent)
+      RowLayout {
+        width: parent.width
+        spacing: Style.spacing.sm
 
-          HoverHandler {
-            id: nameHover
-            cursorShape: Qt.IBeamCursor
+        NavItem {
+          id: nameNav
+          navKey: "skinName"
+          inFooter: true
+          Layout.fillWidth: true
+          implicitHeight: Style.spacing.controlHeight
+          Layout.preferredHeight: implicitHeight
+          onActivate: nameField.forceActiveFocus()
+          onTextKey: function(t) {
+            nameField.forceActiveFocus()
+            nameField.insert(nameField.length, t)
           }
 
-          Item {
+          // The kit's field chrome around a LineField (see LineField.qml).
+          O.BorderSurface {
             anchors.fill: parent
-            anchors.leftMargin: Style.spacing.controlPaddingX
-            anchors.rightMargin: Style.spacing.controlPaddingX
-            clip: true
+            radius: Style.cornerRadius
+            color: Style.normalFillFor(root.fg, Kit.Color.accent)
+            borderSpec: Border.controlSpec(nameField.activeFocus ? "focus" : (nameNav.navFocused || nameHover.hovered ? "hover-cursor" : "normal"), root.fg, Kit.Color.accent)
 
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              visible: nameField.text === ""
-              textFormat: Text.PlainText
-              text: root.tr("placeholder.skinName", "Save as skin name…")
-              color: Kit.Color.textFaint
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
+            HoverHandler {
+              id: nameHover
+              cursorShape: Qt.IBeamCursor
             }
 
-            LineField {
-              id: nameField
-              anchors.verticalCenter: parent.verticalCenter
-              color: root.fg
-              selectionColor: Style.selectionFillFor(root.fg, Kit.Color.accent)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
-              maximumLength: 40
-              takesPaste: true
-              onPasteRequested: if (root.engine) root.engine.pasteInto(nameField)
-              onKeyPressed: function(event) {
-                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                  event.accepted = true
-                  root.saveSkin()
-                  root.restoreKeys()
-                } else if (event.key === Qt.Key_Escape) {
-                  event.accepted = true
-                  root.restoreKeys()
+            Item {
+              anchors.fill: parent
+              anchors.leftMargin: Style.spacing.controlPaddingX
+              anchors.rightMargin: Style.spacing.controlPaddingX
+              clip: true
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: nameField.text === ""
+                textFormat: Text.PlainText
+                text: root.tr("placeholder.skinName", "Save as skin name…")
+                color: Kit.Color.textFaint
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              LineField {
+                id: nameField
+                anchors.verticalCenter: parent.verticalCenter
+                color: root.fg
+                selectionColor: Style.selectionFillFor(root.fg, Kit.Color.accent)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+                maximumLength: 40
+                takesPaste: true
+                onPasteRequested: if (root.engine) root.engine.pasteInto(nameField)
+                onKeyPressed: function(event) {
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    event.accepted = true
+                    root.saveSkin()
+                    root.restoreKeys()
+                  } else if (event.key === Qt.Key_Escape) {
+                    event.accepted = true
+                    root.restoreKeys()
+                  }
                 }
               }
             }
           }
         }
+
+        ActionButton {
+          navKey: "save"
+          inFooter: true
+          text: root.tr("action.save", "Save")
+          selected: nameField.text.trim().length > 0 || root.canUndoPasteHere
+          onTriggered: root.saveSkin()
+        }
       }
 
-      ActionButton {
-        navKey: "save"
-        inFooter: true
-        text: root.tr("action.save", "Save")
-        selected: nameField.text.trim().length > 0 || root.canUndoPasteHere
-        onTriggered: root.saveSkin()
+      RowLayout {
+        width: parent.width
+        spacing: Style.spacing.sm
+
+        HintText {
+          Layout.fillWidth: true
+          text: root.canUndoPasteHere
+            ? root.tr("hint.pastedDraft", "Pasted skin — save to keep it, or undo to go back")
+            : root.tr("hint.editedDraft", "Unsaved edits — save as a skin, or reset")
+        }
+
+        ActionButton {
+          navKey: "undoPaste"
+          inFooter: true
+          visible: root.canUndoPasteHere
+          text: root.tr("action.undoPaste", "Undo paste")
+          iconText: "󰕌"
+          onTriggered: {
+            if (nameField.activeFocus) {
+              nameField.focus = false
+              root.restoreKeys()
+            }
+            if (root.engine) root.engine.undoPaste(root.screenTarget)
+          }
+        }
+
+        ActionButton {
+          navKey: "reset"
+          inFooter: true
+          visible: !root.canUndoPasteHere
+          text: root.tr("action.reset", "Reset")
+          iconText: "󰜉"
+          onTriggered: {
+            if (nameField.activeFocus) {
+              nameField.focus = false
+              root.restoreKeys()
+            }
+            if (root.engine) root.engine.resetTarget(root.screenTarget)
+          }
+        }
       }
     }
 
+    // Shown while editing a clean monitor when shared edits (Icon size, Glass
+    // blur) or earlier changes left an unsaved draft on the Main skin.
     RowLayout {
+      id: mainDraftNotice
       width: parent.width
       spacing: Style.spacing.sm
+      visible: root.hasOtherMainDraft
 
       HintText {
         Layout.fillWidth: true
-        text: root.canUndoPasteHere
-          ? root.tr("hint.pastedDraft", "Pasted skin — save to keep it, or undo to go back")
-          : root.tr("hint.editedDraft", "Unsaved edits — save as a skin, or reset")
+        text: root.tr("hint.mainDraftPending", "Main skin has unsaved edits")
       }
 
       ActionButton {
-        navKey: "undoPaste"
+        navKey: "editMainDraft"
         inFooter: true
-        visible: root.canUndoPasteHere
-        text: root.tr("action.undoPaste", "Undo paste")
-        iconText: "󰕌"
-        onTriggered: if (root.engine) root.engine.undoPaste(root.screenTarget)
+        text: root.tr("action.editMain", "Edit main")
+        onTriggered: root.selectScreenTarget("")
       }
 
       ActionButton {
-        navKey: "reset"
+        navKey: "resetMainDraft"
         inFooter: true
-        visible: !root.canUndoPasteHere
-        text: root.tr("action.reset", "Reset")
-        iconText: "󰜉"
-        onTriggered: if (root.engine) root.engine.resetTarget(root.screenTarget)
+        text: root.mainCanUndoPaste
+          ? root.tr("action.undoPaste", "Undo paste")
+          : root.tr("action.reset", "Reset")
+        iconText: root.mainCanUndoPaste ? "󰕌" : "󰜉"
+        onTriggered: {
+          if (!root.engine) return
+          if (root.mainCanUndoPaste) root.engine.undoPaste("")
+          else root.engine.resetTarget("")
+        }
       }
     }
   }
@@ -1641,26 +1722,43 @@ Column {
     property string iconText: ""
     property string tooltipText: ""
     property bool selected: false
+    property bool disabled: false
     signal triggered()
 
+    navEnabled: !disabled
     implicitWidth: actionButton.implicitWidth
     implicitHeight: actionButton.implicitHeight
     Layout.preferredWidth: implicitWidth
     Layout.preferredHeight: implicitHeight
     width: implicitWidth
     height: implicitHeight
-    onActivate: triggered()
+    onActivate: if (!disabled) triggered()
 
     O.Button {
       id: actionButton
       anchors.fill: parent
+      opacity: action.disabled ? 0.45 : 1
       text: action.text
       iconText: action.iconText
-      tooltipText: action.tooltipText
-      selected: action.selected
-      hasCursor: action.navFocused
+      tooltipText: action.disabled ? "" : action.tooltipText
+      selected: !action.disabled && action.selected
+      hasCursor: !action.disabled && action.navFocused
       bordered: true
-      onClicked: action.triggered()
+      onClicked: if (!action.disabled) action.triggered()
+    }
+
+    MouseArea {
+      id: disabledShield
+      anchors.fill: parent
+      visible: action.disabled
+      hoverEnabled: true
+      cursorShape: Qt.ArrowCursor
+    }
+
+    O.PanelToolTip {
+      visible: action.disabled && disabledShield.containsMouse && action.tooltipText !== ""
+      delay: 300
+      text: action.tooltipText
     }
   }
 }
