@@ -44,6 +44,22 @@ BarWidget {
     }
   }
 
+  // The bar engine this open Studio holds still (see SkinEngine.studioOpen).
+  property var heldEngine: null
+  function syncStudioHold() {
+    var want = panelOpen && hostEngine ? hostEngine : null
+    if (heldEngine === want) return
+    if (heldEngine && typeof heldEngine.releaseStudio === "function") heldEngine.releaseStudio()
+    heldEngine = want
+    if (heldEngine && typeof heldEngine.holdStudio === "function") heldEngine.holdStudio()
+  }
+  onPanelOpenChanged: syncStudioHold()
+  onHostEngineChanged: syncStudioHold()
+  Component.onDestruction: {
+    if (heldEngine && typeof heldEngine.releaseStudio === "function") heldEngine.releaseStudio()
+    heldEngine = null
+  }
+
   // ---- Panel contract the bar routes summon/hide/toggle and Tab through.
   readonly property bool opened: panelOpen
 

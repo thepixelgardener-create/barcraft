@@ -61,6 +61,12 @@ Item {
   // per-monitor choices and drafts stay put for when it goes off again.
   property bool standard: false
   property bool studioButtonPlaced: false
+  // Open Studio panels editing this engine. While any is open the bar holds
+  // its surface still, so live resizes don't blank the strip (Bar.qml).
+  property int studioHolds: 0
+  readonly property bool studioOpen: studioHolds > 0
+  function holdStudio() { studioHolds++ }
+  function releaseStudio() { studioHolds = Math.max(0, studioHolds - 1) }
   readonly property var builtinSkins: SkinParser.builtinSkins()
   readonly property var classicSkins: builtinSkins.filter(function(s) { return s.category !== "wild" })
   readonly property var wildSkins: builtinSkins.filter(function(s) { return s.category === "wild" })
