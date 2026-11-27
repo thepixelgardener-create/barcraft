@@ -164,7 +164,7 @@ Item {
   //   0 written (and removeAfter unlinked if requested)
   //   1 failed (or rolled back when removeAfter could not be removed)
   //   2 target exists (noClobber)
-  //   3 target changed since it was read (expect mismatch)
+  //   3 target or removeAfter changed since it was read (expect / expectOld mismatch)
   //   4 target written, removeAfter could not be removed and rollback failed
   function writeFile(filePath, content, done, options) {
     var opts = options || {}
@@ -172,7 +172,8 @@ Item {
     var want = Qt.md5(text)
     runJob(["sh", "-c", SkinParser.WRITE_FILE_SCRIPT, "sh", String(filePath || ""), want,
             opts.noClobber ? "1" : "0", opts.chmodExec ? "1" : "0",
-            String(opts.removeAfter || ""), String(opts.expect || "")],
+            String(opts.removeAfter || ""), String(opts.expect || ""),
+            String(opts.expectOld || "")],
       text,
       function(code) {
         if (code === 0) {
@@ -241,7 +242,8 @@ Item {
         if (finished || !streamDone || !procExited) return
         finished = true
         readWatchdog.stop()
-        var st = exitCode === 0 ? "ok" : (exitCode === 3 ? "missing" : "error")
+        var overflow = exitCode === 0 && captured.length > SkinParser.MAX_READ_FILE_BYTES
+        var st = (exitCode === 0 && !overflow) ? "ok" : (exitCode === 3 ? "missing" : "error")
         if (callback) callback(st, st === "ok" ? captured : "")
         destroy()
       }

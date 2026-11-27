@@ -37,7 +37,8 @@ function runWriteFile(dest, content, opts) {
     o.noClobber ? "1" : "0",
     o.chmodExec ? "1" : "0",
     String(o.removeAfter || ""),
-    String(o.expect || "")
+    String(o.expect || ""),
+    String(o.expectOld || "")
   ], { input: text, encoding: "utf8" })
   return r.status
 }
@@ -320,6 +321,7 @@ test("rename rolls back cleanly if old file cannot be removed instead of leaving
     const skin = Object.assign(P.parseToml(content, "old-skin", "user"), { id: "old-skin", path: oldFile })
     h.ctx.userSkins = [skin]
     h.ctx.activeSkinId = "old-skin"
+    h.ctx.store.recordHash(oldFile, content)
 
     // Legacy dir is read-only so oldFile cannot be unlinked, while userDir is writable.
     fs.chmodSync(env.legacyDir, 0o555)
@@ -414,6 +416,7 @@ test("rename removes the shadowed legacy copy of the old name", () => {
     const skin = Object.assign(P.parseToml(content, "foo", "user"), { id: "foo", path: primary })
     h.ctx.userSkins = [skin]
     h.ctx.activeSkinId = "foo"
+    h.ctx.store.recordHash(primary, content)
 
     assert.strictEqual(h.ctx.renameUserSkin("foo", "Bar"), "bar")
     assert.strictEqual(fs.existsSync(path.join(env.userDir, "bar.toml")), true)
@@ -808,6 +811,162 @@ test("READ_FILE_SCRIPT rejects files larger than 1 MiB and symlinks", () => {
   } finally {
     cleanupDir(env.root)
   }
+})
+
+test("rename refuses to overwrite or delete externally modified files (same-file, cross-file, and missing hash)", () => {
+  const env = makeTempEnv()
+  try {
+    const file = path.join(env.userDir, "neon.toml")
+    const v1 = P.serializeToml(P.normalizeSkin({ id: "neon", name: "Neon", height: 32 }, "neon", "user"))
+    const v2 = P.serializeToml(P.normalizeSkin({ id: "neon", name: "Neon", height: 48 }, "neon", "user"))
+    fs.writeFileSync(file, v1, "utf8")
+
+    const h = loadEngineHarness(env.userDir, env.legacyDir)
+    const skin = Object.assign(P.parseToml(v1, "neon", "user"), { id: "neon", path: file })
+    h.ctx.userSkins = [skin]
+    h.ctx.activeSkinId = "neon"
+
+    // Missing hash: refuses immediately and triggers rescan.
+    assert.strictEqual(h.ctx.renameUserSkin("neon", "Renamed"), "")
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.renameChangedExternally")
+    assert.strictEqual(fs.existsSync(path.join(env.userDir, "renamed.toml")), false)
+
+    // Record v1 hash, then externally edit disk file to v2.
+    h.ctx.store.recordHash(file, v1)
+    fs.writeFileSync(file, v2, "utf8")
+
+    // Cross-file rename (neon.toml -> renamed.toml) must fail with code 3 and leave both files clean.
+    h.ctx.renameUserSkin("neon", "Renamed")
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.renameChangedExternally")
+    assert.strictEqual(fs.existsSync(path.join(env.userDir, "renamed.toml")), false)
+    assert.strictEqual(fs.readFileSync(file, "utf8"), v2)
+
+    // Same-file rename ("Neon" -> "NEON", same slug neon.toml) must also fail with code 3.
+    h.ctx.renameUserSkin("neon", "NEON")
+    assert.strictEqual(h.notices[h.notices.length - 1].key, "status.renameChangedExternally")
+    assert.strictEqual(fs.readFileSync(file, "utf8"), v2)
+    assert.strictEqual(h.ctx.userSkins[0].name, "Neon")
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("SCAN_SKINS_SCRIPT skips invalid filenames before quota and rejects files exceeding 32 KiB", () => {
+  const env = makeTempEnv()
+  try {
+    const body = name => P.serializeToml(P.normalizeSkin({ id: name, name: name, height: 34 }, name, "user"))
+    // Drop 210 invalid-basename files (leading dash, spaces, dots, >64 chars) plus 2 valid files.
+    for (let i = 0; i < 70; i++) {
+      fs.writeFileSync(path.join(env.userDir, "-bad-" + i + ".toml"), body("bad"), "utf8")
+      fs.writeFileSync(path.join(env.userDir, "bad name " + i + ".toml"), body("bad"), "utf8")
+      fs.writeFileSync(path.join(env.userDir, "a".repeat(65) + i + ".toml"), body("bad"), "utf8")
+    }
+    const valid1 = path.join(env.userDir, "zzz-valid-1.toml")
+    const valid2 = path.join(env.userDir, "zzz-valid-2.toml")
+    const exactMax = path.join(env.userDir, "zzz-exact.toml")
+    const overMax = path.join(env.userDir, "zzz-over.toml")
+    fs.writeFileSync(valid1, body("Valid 1"), "utf8")
+    fs.writeFileSync(valid2, body("Valid 2"), "utf8")
+    fs.writeFileSync(exactMax, "[bar-skin]\nheight = 30\n# " + "x".repeat(32768 - 25), "utf8")
+    fs.writeFileSync(overMax, "[bar-skin]\nheight = 30\n# " + "x".repeat(32769 - 25), "utf8")
+
+    const r = spawnSync("sh", ["-c", P.SCAN_SKINS_SCRIPT, "sh", "5", env.userDir, env.legacyDir], { encoding: "utf8" })
+    assert.strictEqual(r.status, 0, r.stderr)
+    const parsed = JSON.parse(r.stdout)
+    assert.strictEqual(parsed.truncated, 0)
+    assert.strictEqual(parsed.rows.length, 3)
+    assert.ok(parsed.rows.some(row => row.path === valid1))
+    assert.ok(parsed.rows.some(row => row.path === valid2))
+    assert.ok(parsed.rows.some(row => row.path === exactMax))
+    assert.strictEqual(parsed.rows.some(row => row.path === overMax), false)
+  } finally {
+    cleanupDir(env.root)
+  }
+})
+
+test("legacy barcraft.toml migration only moves file after confirmed persistence and falls back to .migrated", () => {
+  const qml = fs.readFileSync(path.join(__dirname, "..", "SkinEngine.qml"), "utf8")
+  function method(name) {
+    const re = new RegExp("^  (function " + name + "\\([^\\n]*\\) \\{[\\s\\S]*?^  \\})", "m")
+    const m = qml.match(re)
+    assert.ok(m, "missing method " + name + " in SkinEngine.qml")
+    return m[1]
+  }
+  function runCase({ mutateOk, activeText, migratedText }) {
+    const commands = []
+    let persistedPayload = null
+    const ctx = vm.createContext({
+      SkinParser: P,
+      isPrimary: true,
+      configBlock: null,
+      stateLoaded: false,
+      migrated: false,
+      _legacyWaits: 0,
+      legacyStatePath: "/tmp/barcraft.toml",
+      activeSkinId: "floating",
+      followTheme: true,
+      standard: false,
+      studioButtonPlaced: false,
+      prefs: P.normalizePrefs({}),
+      monitorSkins: {},
+      monitorDrafts: {},
+      monitorDraftBaseHashes: {},
+      hasCustomDraft: false,
+      customSkin: P.defaultSkin(),
+      draftBaseHash: "",
+      _lastConfigJson: "",
+      _tokenEpoch: 0,
+      revision: 0,
+      pasteUndoSnapshots: {},
+      legacyStateView: { path: "/tmp/barcraft.toml", settled: true, loaded: !!activeText, text: () => activeText || "" },
+      legacyMigratedView: { path: "/tmp/barcraft.toml.migrated", settled: true, loaded: !!migratedText, text: () => migratedText || "" },
+      loadTimer: { restart() {} },
+      persistDebounce: { stop() {}, restart() {} },
+      settleTimer: { restart() {} },
+      ensureStudioButtonFn: null,
+      shellApi: {
+        mutateShellConfig(fn) {
+          if (!mutateOk) return false
+          const cfg = {}
+          fn(cfg)
+          persistedPayload = cfg
+          return true
+        }
+      },
+      clearPasteUndo() {},
+      findSkinById: id => P.builtinSkins().find(s => s.id === id) || null,
+      _migrateRenamedIds() {},
+      _rescanIfPinnedMissing() {},
+      runCommand: argv => commands.push(argv)
+    })
+    ctx.engine = ctx
+    for (const fn of ["stateJson", "_studioButtonChanged", "persistState", "applyState", "applyLegacyText", "loadState"]) {
+      vm.runInContext(method(fn), ctx)
+    }
+    ctx.loadState()
+    return { ctx, commands, persistedPayload }
+  }
+
+  // Persistence fails -> must NOT move barcraft.toml.
+  const failed = runCase({ mutateOk: false, activeText: "[barcraft]\nactive-skin = \"islands\"\n", migratedText: "" })
+  assert.strictEqual(failed.ctx.activeSkinId, "islands")
+  assert.strictEqual(failed.ctx.migrated, false)
+  assert.strictEqual(failed.commands.length, 0)
+
+  // Persistence succeeds -> persists islands to shell.json AND moves barcraft.toml.
+  const ok = runCase({ mutateOk: true, activeText: "[barcraft]\nactive-skin = \"islands\"\n", migratedText: "" })
+  assert.strictEqual(ok.ctx.activeSkinId, "islands")
+  assert.strictEqual(ok.ctx.migrated, true)
+  assert.strictEqual(ok.persistedPayload.bar.barcraft.skin, "islands")
+  assert.strictEqual(ok.commands.length, 1)
+  assert.strictEqual(ok.commands[0][0], "mv")
+
+  // Fallback: barcraft.toml already moved to .migrated before shell.json wrote -> recovers from .migrated without mv.
+  const fallback = runCase({ mutateOk: true, activeText: "", migratedText: "[barcraft]\nactive-skin = \"capsule\"\n" })
+  assert.strictEqual(fallback.ctx.activeSkinId, "capsule")
+  assert.strictEqual(fallback.ctx.migrated, true)
+  assert.strictEqual(fallback.persistedPayload.bar.barcraft.skin, "capsule")
+  assert.strictEqual(fallback.commands.length, 0)
 })
 
 console.log("SkinStore: " + passed + " tests passed")

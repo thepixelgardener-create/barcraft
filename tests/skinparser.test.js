@@ -1101,4 +1101,29 @@ test("StudioContent formatNotice handles 0-arg strings and literal $&/%1 safely"
   assert.strictEqual(ctx.formatNotice("Pasted %1", "A $& %2 skin"), "Pasted A $& %2 skin")
 })
 
+test("malformed skin packs and oversized theme bar-skin maps stay bounded during accumulation", () => {
+  const dir = "/tmp/barcraft-hostile-pack"
+  const badBody = "[bar-skin]\n" + "not valid toml line\n".repeat(400)
+  const rows = []
+  for (let i = 0; i < 200; i++) {
+    rows.push({ path: dir + "/bad-" + String(i).padStart(3, "0") + ".toml", text: badBody })
+  }
+  const t0 = Date.now()
+  const lib = P.parseSkinLibraryDetailed(rows, [dir])
+  assert.ok(Date.now() - t0 < 500, "hostile 200-file pack took too long")
+  assert.strictEqual(lib.diagnostics.length, P.MAX_LIBRARY_DIAGNOSTICS + 1)
+  assert.ok(/…and 150 more files/.test(lib.diagnostics[P.MAX_LIBRARY_DIAGNOSTICS].errors[0].message))
+  assert.strictEqual(lib.diagnostics[0].errors.length, 21)
+  assert.ok(/…and 380 more/.test(lib.diagnostics[0].errors[20].message))
+
+  const hugeTheme = { "bar-skin.height": "34" }
+  for (let k = 0; k < 500; k++) hugeTheme["bar-skin.bogus-" + k] = "x".repeat(4000)
+  const themeRes = P.inspectShellValues(hugeTheme, () => null)
+  assert.ok(themeRes.skin && themeRes.skin.height === 34)
+  assert.strictEqual(themeRes.errors.length, 21)
+  assert.strictEqual(themeRes.errorCount, 500)
+  assert.ok(/…and 480 more/.test(themeRes.errors[20].message))
+  for (const e of themeRes.errors) assert.ok(e.message.length <= 160)
+})
+
 console.log("SkinParser: " + passed + " tests passed")

@@ -106,6 +106,7 @@
   "status.copied": "Copied the [bar-skin] TOML to the clipboard",
   "status.copyFailed": "Couldn't copy to the clipboard",
   "status.renamed": "Renamed to %1",
+  "status.renameChangedExternally": "%1 changed on disk. Rename canceled.",
   "status.renamePartial": "Saved %1, but could not remove the old file",
   "status.deleted": "Deleted %1",
   "status.deleteFailed": "Could not delete %1",

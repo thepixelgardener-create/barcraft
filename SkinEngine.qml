@@ -814,12 +814,20 @@ Item {
     var sameFile = oldPath === renamed.path
     var removeOld = (!sameFile && SkinParser.isSafeSkinPath(oldPath, [engine.userSkinsDir, engine.legacySkinsDir])) ? oldPath : ""
     var oldHash = SkinParser.sanitizeMd5(store.hashForPath(oldPath))
+    if (!oldHash) {
+      store.rescan()
+      engine.notice("status.renameChangedExternally", skin.name, true)
+      return ""
+    }
 
     // Write and byte-verify the replacement file on disk and confirm oldPath
-    // removal before updating Studio state.
+    // still matches its scanned hash before updating Studio state.
     store.writeFile(renamed.path, SkinParser.serializeToml(renamed), function(ok, code) {
       if (!ok) {
-        if (code === 4) {
+        if (code === 3) {
+          store.rescan()
+          engine.notice("status.renameChangedExternally", skin.name, true)
+        } else if (code === 4) {
           store.rescan()
           engine.notice("status.renamePartial", cleanName, true)
         } else {
@@ -855,7 +863,7 @@ Item {
       engine.skinRenamed(id, slug)
       engine.notice("status.renamed", cleanName, false)
       if (removeOld) store.removeLegacySibling(removeOld)
-    }, { noClobber: !sameFile, removeAfter: removeOld })
+    }, { noClobber: !sameFile, expect: sameFile ? oldHash : "", removeAfter: removeOld, expectOld: removeOld ? oldHash : "" })
     return slug
   }
 
@@ -1069,16 +1077,18 @@ Item {
     persistDebounce.stop()
     if (!stateLoaded) {
       persistDebounce.restart()
-      return
+      return false
     }
-    if (!isPrimary || !shellApi || typeof shellApi.mutateShellConfig !== "function") return
+    if (!isPrimary || !shellApi || typeof shellApi.mutateShellConfig !== "function") return false
     var json = stateJson()
-    if (json === _lastConfigJson) return
-    _lastConfigJson = json
-    shellApi.mutateShellConfig(function(config) {
+    if (json === _lastConfigJson) return true
+    var ok = shellApi.mutateShellConfig(function(config) {
       if (!config.bar || typeof config.bar !== "object") config.bar = {}
       config.bar.barcraft = JSON.parse(json)
     })
+    if (ok === false) return false
+    _lastConfigJson = json
+    return true
   }
 
   // 0.6 could save a skin as draft.toml or standard.toml. Those ids are
@@ -1168,14 +1178,19 @@ Item {
           _lastConfigJson = stateJson()
         }
       }
+      stateLoaded = true
     } else {
-      if (isPrimary && legacyStateView.path && !legacyStateView.settled && _legacyWaits++ < 25) {
+      if (isPrimary && legacyStateView.path && (!legacyStateView.settled || !legacyMigratedView.settled) && _legacyWaits++ < 25) {
         loadTimer.restart()
         return
       }
-      var hasLegacy = isPrimary && legacyStateView.loaded && !!(legacyStateView.text() || "").trim()
+      var activeLegacyText = isPrimary && legacyStateView.loaded ? String(legacyStateView.text() || "") : ""
+      var migratedFallbackText = isPrimary && legacyMigratedView.loaded ? String(legacyMigratedView.text() || "") : ""
+      var hasActiveLegacy = !!activeLegacyText.trim()
+      var hasFallbackLegacy = !hasActiveLegacy && !!migratedFallbackText.trim()
+      var hasLegacy = hasActiveLegacy || hasFallbackLegacy
       if (hasLegacy) {
-        applyLegacyText(legacyStateView.text())
+        applyLegacyText(hasActiveLegacy ? activeLegacyText : migratedFallbackText)
       }
       if (isPrimary && typeof ensureStudioButtonFn === "function") {
         if (_studioButtonChanged(ensureStudioButtonFn(false))) {
@@ -1183,13 +1198,17 @@ Item {
           if (!hasLegacy) _lastConfigJson = stateJson()
         }
       }
+      stateLoaded = true
       if (hasLegacy) {
-        persistState()
-        migrated = true
-        runCommand(["mv", "-n", "--", legacyStatePath, legacyStatePath + ".migrated"])
+        var persisted = persistState()
+        if (persisted) {
+          migrated = true
+          if (hasActiveLegacy) {
+            runCommand(["mv", "-n", "--", legacyStatePath, legacyStatePath + ".migrated"])
+          }
+        }
       }
     }
-    stateLoaded = true
     _migrateRenamedIds()
     _rescanIfPinnedMissing()
     settleTimer.restart()
@@ -1200,6 +1219,17 @@ Item {
     property bool loaded: false
     property bool settled: false
     path: engine.isPrimary ? engine.legacyStatePath : ""
+    printErrors: false
+    watchChanges: false
+    onLoaded: { loaded = true; settled = true }
+    onLoadFailed: settled = true
+  }
+
+  FileView {
+    id: legacyMigratedView
+    property bool loaded: false
+    property bool settled: false
+    path: engine.isPrimary ? (engine.legacyStatePath + ".migrated") : ""
     printErrors: false
     watchChanges: false
     onLoaded: { loaded = true; settled = true }

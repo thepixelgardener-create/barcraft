@@ -38,13 +38,16 @@ function isReservedSkinId(slug, builtinList) {
 //   0 written (and old removed if requested)
 //   1 failed (or rolled back when old could not be removed)
 //   2 target already exists (noClobber)
-//   3 target changed on disk since it was read (expect mismatch)
+//   3 target or old file changed on disk since it was read (expect mismatch)
 //   4 target written, old file could not be removed and rollback failed
 var WRITE_FILE_SCRIPT =
-  "dest=$1; want=$2; noclobber=$3; mkexec=$4; old=$5; expect=$6; " +
+  "dest=$1; want=$2; noclobber=$3; mkexec=$4; old=$5; expect=$6; expect_old=$7; " +
   "md5() { md5sum | cut -d' ' -f1; }; " +
   "[ -n \"$dest\" ] && [ ! -L \"$dest\" ] || exit 1; " +
   "if [ \"$noclobber\" = 1 ] && [ -e \"$dest\" ]; then exit 2; fi; " +
+  "if [ -n \"$old\" ] && [ \"$old\" != \"$dest\" ] && [ -n \"$expect_old\" ]; then " +
+  "  [ ! -L \"$old\" ] && [ -f \"$old\" ] && [ \"$(md5 < \"$old\")\" = \"$expect_old\" ] || exit 3; " +
+  "fi; " +
   "dir=$(dirname -- \"$dest\"); " +
   "mkdir -p -- \"$dir\" || exit 1; " +
   "tmp=$(mktemp \"$dir/.barcraft.XXXXXX\") || exit 1; " +
@@ -68,6 +71,12 @@ var WRITE_FILE_SCRIPT =
   "  if [ -L \"$old\" ] || { [ -e \"$old\" ] && [ ! -f \"$old\" ]; }; then " +
   "    if [ \"$noclobber\" = 1 ]; then rm -f -- \"$dest\" 2>/dev/null; [ ! -e \"$dest\" ] && exit 1 || exit 4; fi; " +
   "    exit 4; " +
+  "  fi; " +
+  "  if [ -n \"$expect_old\" ]; then " +
+  "    if [ ! -f \"$old\" ] || [ \"$(md5 < \"$old\")\" != \"$expect_old\" ]; then " +
+  "      if [ \"$noclobber\" = 1 ]; then rm -f -- \"$dest\" 2>/dev/null; [ ! -e \"$dest\" ] && exit 3 || exit 4; fi; " +
+  "      exit 4; " +
+  "    fi; " +
   "  fi; " +
   "  if [ -f \"$old\" ]; then " +
   "    rm -- \"$old\" 2>/dev/null; " +
@@ -110,33 +119,45 @@ var READ_FILE_SCRIPT =
   "[ ! -L \"$p\" ] && [ -f \"$p\" ] && [ -r \"$p\" ] || exit 4; " +
   "size=$(stat -c %s -- \"$p\" 2>/dev/null || echo " + (MAX_READ_FILE_BYTES + 1) + "); " +
   "[ \"$size\" -le " + MAX_READ_FILE_BYTES + " ] || exit 4; " +
-  // head, not cat: a file that grows after the size check is still cut off.
-  "head -c " + MAX_READ_FILE_BYTES + " -- \"$p\""
+  // Read at most 1 MiB + 1 byte so a file that grows after stat stays bounded
+  // and SkinStore can detect and reject overflow instead of truncating.
+  "head -c " + (MAX_READ_FILE_BYTES + 1) + " -- \"$p\""
 
 var MAX_SCANNED_SKINS = 200
+var MAX_SKIN_FILE_BYTES = 32768
 
-// Scans up to `limit` regular non-symlink `.toml` files (<= 32 KiB) from
-// userdir then legacydir, checking any pinned slugs first so active,
-// per-monitor, draft, and recently saved skins are never pushed past the limit
-// by a large skin pack. Outputs `{rows: [{path, text}...], truncated: N}` with
-// skipped counting capped at 1000 so huge folders stay fast.
+// Scans up to `limit` regular non-symlink `.toml` files (<= 32 KiB) with safe
+// basenames from userdir then legacydir, checking any pinned slugs first so
+// active, per-monitor, draft, and recently saved skins are never pushed past
+// the limit by a large skin pack or invalid filenames. Reads are hard-bounded
+// to 32,769 bytes via `head` so a growing file cannot bypass the size cap.
+// Outputs `{rows: [{path, text}...], truncated: N}` with skipped counting
+// capped at 1000 so huge folders stay fast.
 var SCAN_SKINS_SCRIPT =
+  "LC_ALL=C; export LC_ALL; " +
   "limit=$1; userdir=${2%/}; legacydir=${3%/}; shift 3; " +
   "nl=$(printf '\\n_'); nl=${nl%_}; " +
   "{ " +
   "  n=0; skipped=0; seen=\"$nl\"; " +
   "  emit() { " +
   "    f=$1; " +
+  "    base=${f##*/}; " +
+  "    case \"$base\" in [A-Za-z0-9]*.[Tt][Oo][Mm][Ll]) ;; *) return 0 ;; esac; " +
+  "    stem=${base%.*}; " +
+  "    [ \"${#stem}\" -le 64 ] || return 0; " +
+  "    case \"$stem\" in *[!A-Za-z0-9_-]*) return 0 ;; esac; " +
   "    [ ! -L \"$f\" ] && [ -f \"$f\" ] && [ -r \"$f\" ] || return 0; " +
   "    case \"$seen\" in *\"$nl$f$nl\"*) return 0 ;; esac; " +
   "    seen=\"$seen$f$nl\"; " +
-  "    size=$(stat -c %s \"$f\" 2>/dev/null || echo 999999); " +
-  "    [ \"$size\" -le 32768 ] || return 0; " +
+  "    size=$(stat -c %s -- \"$f\" 2>/dev/null || echo 999999); " +
+  "    [ \"$size\" -le " + MAX_SKIN_FILE_BYTES + " ] || return 0; " +
   "    if [ \"$n\" -ge \"$limit\" ]; then " +
   "      skipped=$((skipped + 1)); " +
   "      return 0; " +
   "    fi; " +
-  "    jq -Rs --arg path \"$f\" '{path: $path, text: .}' \"$f\"; " +
+  "    row=$(head -c " + (MAX_SKIN_FILE_BYTES + 1) + " -- \"$f\" 2>/dev/null | jq -Rsc --arg path \"$f\" 'if utf8bytelength <= " + MAX_SKIN_FILE_BYTES + " then {path: $path, text: .} else empty end'); " +
+  "    [ -n \"$row\" ] || return 0; " +
+  "    printf '%s\\n' \"$row\"; " +
   "    n=$((n + 1)); " +
   "  }; " +
   "  for slug in \"$@\"; do " +
@@ -719,6 +740,18 @@ function parseTomlSectionsWithLines(text) {
   var section = ""
   var ignoreSection = false
   var syntaxErrors = []
+  var syntaxErrorCount = 0
+  function recordSyntaxError(lineNo, key, message, duplicate) {
+    syntaxErrorCount++
+    if (syntaxErrors.length >= MAX_REPORTED_ERRORS) return
+    var entry = {
+      line: lineNo,
+      key: sanitizeLabel(key, 40),
+      message: sanitizeLabel(message, 160)
+    }
+    if (duplicate) entry.duplicate = true
+    syntaxErrors.push(entry)
+  }
   var lines = String(text || "").split("\n")
   for (var i = 0; i < lines.length; i++) {
     var lineNo = i + 1
@@ -742,27 +775,27 @@ function parseTomlSectionsWithLines(text) {
     var kv = line.match(/^(?:"([^"\\]{1,64})"|([A-Za-z0-9_-]{1,64}))\s*=\s*(.*)$/)
     if (!kv) {
       if (section === "bar-skin" || section === "") {
-        syntaxErrors.push({ line: lineNo, key: "", message: "Line " + lineNo + ": invalid TOML syntax" })
+        recordSyntaxError(lineNo, "", "Line " + lineNo + ": invalid TOML syntax", false)
       }
       continue
     }
     var key = kv[1] !== undefined ? kv[1] : kv[2]
     if (isUnsafeKey(key)) continue
     if ((section === "bar-skin" || section === "") && hasOwn(out[section], key)) {
-      syntaxErrors.push({ line: lineNo, key: key, duplicate: true, message: "Line " + lineNo + ": duplicate key \"" + sanitizeLabel(key, 40) + "\"" })
+      recordSyntaxError(lineNo, key, "Line " + lineNo + ": duplicate key \"" + sanitizeLabel(key, 40) + "\"", true)
       continue
     }
     var value = parseTomlValue(kv[3])
     if (value === null) {
       if (section === "bar-skin" || section === "") {
-        syntaxErrors.push({ line: lineNo, key: key, message: "Line " + lineNo + ": invalid value for \"" + sanitizeLabel(key, 40) + "\"" })
+        recordSyntaxError(lineNo, key, "Line " + lineNo + ": invalid value for \"" + sanitizeLabel(key, 40) + "\"", false)
       }
       continue
     }
     out[section][key] = value
     linesMap[section][key] = lineNo
   }
-  return { sections: out, lines: linesMap, syntaxErrors: syntaxErrors }
+  return { sections: out, lines: linesMap, syntaxErrors: syntaxErrors, syntaxErrorCount: syntaxErrorCount }
 }
 
 function parseTomlSections(text) {
@@ -989,42 +1022,9 @@ function copySkin(skin) {
 var MAX_REPORTED_ERRORS = 20
 var MAX_KEY_SUGGESTIONS = 5
 var MAX_REPORTED_SKIPPED = 8
-
-// Keeps a hostile file or paste from producing thousands of diagnostics, and
-// keeps every message short and free of control characters.
-function capErrors(errors) {
-  var out = []
-  for (var i = 0; i < errors.length && i < MAX_REPORTED_ERRORS; i++) {
-    var e = errors[i]
-    out.push({
-      line: e.line || 0,
-      key: sanitizeLabel(e.key, 40),
-      suggestion: e.suggestion || "",
-      message: sanitizeLabel(e.message, 160)
-    })
-  }
-  if (errors.length > MAX_REPORTED_ERRORS) {
-    out.push({ line: 0, key: "", message: "…and " + (errors.length - MAX_REPORTED_ERRORS) + " more" })
-  }
-  return out
-}
-
-function capAdjustments(adjustments) {
-  var out = []
-  for (var i = 0; i < adjustments.length && i < MAX_REPORTED_ERRORS; i++) {
-    var a = adjustments[i]
-    out.push({
-      line: a.line || 0,
-      key: sanitizeLabel(a.key, 40),
-      applied: a.applied,
-      message: sanitizeLabel(a.message, 160)
-    })
-  }
-  if (adjustments.length > MAX_REPORTED_ERRORS) {
-    out.push({ line: 0, key: "", message: "…and " + (adjustments.length - MAX_REPORTED_ERRORS) + " more" })
-  }
-  return out
-}
+var MAX_LIBRARY_DIAGNOSTICS = 50
+var MAX_THEME_SKIN_KEYS = 100
+var MAX_THEME_VALUE_LEN = 512
 
 function skippedSummary(keys, totalCount) {
   var total = totalCount !== undefined ? Math.max(totalCount, keys.length) : keys.length
@@ -1032,10 +1032,42 @@ function skippedSummary(keys, totalCount) {
   return total > MAX_REPORTED_SKIPPED ? shown + " +" + (total - MAX_REPORTED_SKIPPED) : shown
 }
 
-function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
+function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors, extraErrorCount) {
   var tokenErrors = Array.isArray(extraErrors) ? extraErrors : []
+  var tokenTotal = extraErrorCount !== undefined ? Math.max(Number(extraErrorCount) || 0, tokenErrors.length) : tokenErrors.length
+  // Cap retained error and adjustment objects during accumulation so a
+  // malformed skin pack never allocates thousands of transient diagnostics.
   var errors = []
+  var errorCount = 0
   var adjustments = []
+  var adjustmentCount = 0
+  var errorSink = {
+    push: function(e) {
+      errorCount++
+      if (errors.length < MAX_REPORTED_ERRORS) {
+        errors.push({
+          line: e.line || 0,
+          key: sanitizeLabel(e.key, 40),
+          suggestion: e.suggestion || "",
+          message: sanitizeLabel(e.message, 160)
+        })
+      }
+    }
+  }
+  var adjustmentSink = {
+    push: function(a) {
+      adjustmentCount++
+      if (adjustments.length < MAX_REPORTED_ERRORS) {
+        adjustments.push({
+          line: a.line || 0,
+          key: sanitizeLabel(a.key, 40),
+          applied: a.applied,
+          message: sanitizeLabel(a.message, 160)
+        })
+      }
+    }
+  }
+  var noopSink = { push: function() {} }
   var skippedKeys = []
   var skippedSet = Object.create(null)
   var skippedCount = 0
@@ -1054,7 +1086,7 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     var rawFmt = String(map["format"] || "").trim()
     var fmtLine = lineMap && lineMap["format"] ? lineMap["format"] : 0
     if (!/^[1-9]\d{0,5}$/.test(rawFmt)) {
-      errors.push({
+      errorSink.push({
         line: fmtLine,
         key: "format",
         message: formatLinePrefix(fmtLine) + "invalid format \"" + sanitizeLabel(rawFmt, 12) + "\""
@@ -1069,7 +1101,12 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
   for (var t = 0; t < tokenErrors.length; t++) {
     var te = tokenErrors[t]
     if (newerFormat) skip(te.key ? te.key : "line " + te.line)
-    else errors.push(te)
+    else errorSink.push(te)
+  }
+  if (tokenTotal > tokenErrors.length) {
+    var extraOverflow = tokenTotal - tokenErrors.length
+    if (newerFormat) skippedCount += extraOverflow
+    else errorCount += extraOverflow
   }
   var base = null
   if (map["preset"] !== undefined) {
@@ -1082,7 +1119,7 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     } else if (newerFormat) {
       skip("preset")
     } else {
-      errors.push({
+      errorSink.push({
         line: pLine,
         key: "preset",
         message: formatLinePrefix(pLine) + "unknown preset \"" + sanitizeLabel(presetName, 40) + "\""
@@ -1100,24 +1137,27 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
         skip(key)
         continue
       }
-      var sug = suggestions < MAX_KEY_SUGGESTIONS ? closestKeySuggestion(key) : ""
-      suggestions++
-      errors.push({
-        line: lineNo,
-        key: key,
-        suggestion: sug,
-        message: formatLinePrefix(lineNo) + "unknown key \"" + sanitizeLabel(key, 40) + "\"" + (sug ? " (did you mean \"" + sug + "\"?)" : "")
-      })
+      if (errors.length < MAX_REPORTED_ERRORS) {
+        var sug = suggestions < MAX_KEY_SUGGESTIONS ? closestKeySuggestion(key) : ""
+        suggestions++
+        errorSink.push({
+          line: lineNo,
+          key: key,
+          suggestion: sug,
+          message: formatLinePrefix(lineNo) + "unknown key \"" + sanitizeLabel(key, 40) + "\"" + (sug ? " (did you mean \"" + sug + "\"?)" : "")
+        })
+      } else {
+        errorCount++
+      }
       continue
     }
     if (key === "inner-padding" && map["inner-padding-x"] !== undefined) continue
     if (newerFormat) {
-      var entryErrors = []
-      if (!validateRawEntry(key, map[key], lineNo, entryErrors, adjustments)) {
+      if (!validateRawEntry(key, map[key], lineNo, noopSink, adjustmentSink)) {
         skip(key)
         continue
       }
-    } else if (!validateRawEntry(key, map[key], lineNo, errors, adjustments)) {
+    } else if (!validateRawEntry(key, map[key], lineNo, errorSink, adjustmentSink)) {
       continue
     }
     merged[field] = map[key]
@@ -1126,11 +1166,17 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     if (field === "name") named = true
   }
   if (newerFormat && skippedCount > 0) {
-    adjustments.push({
+    adjustmentSink.push({
       line: 0,
       key: "format",
       message: "format " + formatVersion + " is newer than this Barcraft; skipped: " + skippedSummary(skippedKeys, skippedCount)
     })
+  }
+  if (errorCount > MAX_REPORTED_ERRORS) {
+    errors.push({ line: 0, key: "", message: "…and " + (errorCount - MAX_REPORTED_ERRORS) + " more" })
+  }
+  if (adjustmentCount > MAX_REPORTED_ERRORS) {
+    adjustments.push({ line: 0, key: "", message: "…and " + (adjustmentCount - MAX_REPORTED_ERRORS) + " more" })
   }
   if (!named && !base) merged.name = fallbackId
   if (!merged.id) merged.id = fallbackId
@@ -1146,8 +1192,10 @@ function inspectKvMap(map, lineMap, fallbackId, source, lookup, extraErrors) {
     skippedKeys: skippedKeys,
     skippedCount: skippedCount,
     skippedSummary: skippedSummary(skippedKeys, skippedCount),
-    errors: capErrors(errors),
-    adjustments: capAdjustments(adjustments)
+    errors: errors,
+    errorCount: errorCount,
+    adjustments: adjustments,
+    adjustmentCount: adjustmentCount
   }
 }
 
@@ -1205,9 +1253,21 @@ function extractSkinKvMapWithLines(text) {
     }
   }
   if (!found && !hasSkinSection) {
-    return parsed.syntaxErrors.length ? { map: map, lineMap: lineMap, syntaxErrors: parsed.syntaxErrors, hasSection: false } : null
+    return parsed.syntaxErrorCount ? {
+      map: map,
+      lineMap: lineMap,
+      syntaxErrors: parsed.syntaxErrors,
+      syntaxErrorCount: parsed.syntaxErrorCount,
+      hasSection: false
+    } : null
   }
-  return { map: map, lineMap: lineMap, syntaxErrors: parsed.syntaxErrors, hasSection: hasSkinSection }
+  return {
+    map: map,
+    lineMap: lineMap,
+    syntaxErrors: parsed.syntaxErrors,
+    syntaxErrorCount: parsed.syntaxErrorCount,
+    hasSection: hasSkinSection
+  }
 }
 
 function extractSkinKvMap(text) {
@@ -1229,12 +1289,16 @@ function inspectToml(text, fallbackId, source, lookup) {
       formatVersion: SKIN_FORMAT_VERSION,
       newerFormat: false,
       skippedKeys: [],
+      skippedCount: 0,
       skippedSummary: "",
       errors: [],
-      adjustments: []
+      errorCount: 0,
+      adjustments: [],
+      adjustmentCount: 0
     }
   }
-  return inspectKvMap(extracted.map, extracted.lineMap, fallbackId, source, lookup, extracted.syntaxErrors)
+  return inspectKvMap(extracted.map, extracted.lineMap, fallbackId, source, lookup,
+    extracted.syntaxErrors, extracted.syntaxErrorCount)
 }
 
 function parseToml(text, fallbackId, source, lookup) {
@@ -1282,7 +1346,13 @@ function parseSkinLibraryDetailed(rows, allowedDirs, builtinList) {
   var seenFileSlugs = Object.create(null)
   var renamedIds = Object.create(null)
   var diagnostics = []
-  for (var i = 0; i < list.length; i++) {
+  var diagnosticFileCount = 0
+  function pushDiagnostic(entry) {
+    diagnosticFileCount++
+    if (diagnostics.length < MAX_LIBRARY_DIAGNOSTICS) diagnostics.push(entry)
+  }
+  var maxRows = Math.min(list.length, MAX_SCANNED_SKINS)
+  for (var i = 0; i < maxRows; i++) {
     var row = list[i]
     if (!row || typeof row !== "object") continue
     var file = String(row.path || "")
@@ -1292,7 +1362,7 @@ function parseSkinLibraryDetailed(rows, allowedDirs, builtinList) {
     var extracted = extractSkinKvMapWithLines(row.text)
     if (!extracted) {
       var empty = String(row.text || "").trim() === ""
-      diagnostics.push({ path: file, errors: [{ line: 0, key: "", message: empty ? "File is empty" : "No [bar-skin] section found" }], adjustments: [] })
+      pushDiagnostic({ path: file, errors: [{ line: 0, key: "", message: empty ? "File is empty" : "No [bar-skin] section found" }], adjustments: [] })
       continue
     }
     // Only a file with a [bar-skin] section claims its name, so a broken copy
@@ -1309,7 +1379,8 @@ function parseSkinLibraryDetailed(rows, allowedDirs, builtinList) {
       path: file,
       map: extracted.map,
       lineMap: extracted.lineMap,
-      syntaxErrors: extracted.syntaxErrors
+      syntaxErrors: extracted.syntaxErrors,
+      syntaxErrorCount: extracted.syntaxErrorCount
     }
     order.push(slug)
   }
@@ -1334,10 +1405,10 @@ function parseSkinLibraryDetailed(rows, allowedDirs, builtinList) {
         if (fromUser) return fromUser
       }
       return lookupBuiltin(target)
-    }, entry.syntaxErrors)
+    }, entry.syntaxErrors, entry.syntaxErrorCount)
     delete visiting[slug]
     if (inspected.errors.length > 0 || inspected.adjustments.length > 0) {
-      diagnostics.push({
+      pushDiagnostic({
         path: entry.path,
         errors: inspected.errors,
         adjustments: inspected.adjustments
@@ -1357,6 +1428,13 @@ function parseSkinLibraryDetailed(rows, allowedDirs, builtinList) {
   for (var j = 0; j < order.length; j++) {
     var s = resolveSlug(order[j])
     if (s) parsed.push(s)
+  }
+  if (diagnosticFileCount > MAX_LIBRARY_DIAGNOSTICS) {
+    diagnostics.push({
+      path: "(skin library)",
+      errors: [{ line: 0, key: "", message: "…and " + (diagnosticFileCount - MAX_LIBRARY_DIAGNOSTICS) + " more files with diagnostics" }],
+      adjustments: []
+    })
   }
   // old file slug -> id it loads under, for reserved names moved aside.
   var renamed = {}
@@ -1419,25 +1497,47 @@ function inspectShellValues(shellValues, lookup) {
       formatVersion: SKIN_FORMAT_VERSION,
       newerFormat: false,
       skippedKeys: [],
+      skippedCount: 0,
       skippedSummary: "",
       errors: [],
-      adjustments: []
+      errorCount: 0,
+      adjustments: [],
+      adjustmentCount: 0
     }
   }
   var map = Object.create(null)
   var found = false
+  var keyCount = 0
+  var overflowErrors = []
+  var overflowErrorCount = 0
   var prefix = "bar-skin."
   for (var k in shellValues) {
     if (!hasOwn(shellValues, k)) continue
     if (k.indexOf(prefix) === 0) {
       var sub = k.slice(prefix.length)
-      if (!isUnsafeKey(sub)) {
-        map[sub] = shellValues[k]
-        found = true
+      if (!sub || sub.length > 64 || isUnsafeKey(sub)) continue
+      var known = hasOwn(KEY_MAP, sub) || sub === "preset" || sub === "format"
+      if (!known && keyCount >= MAX_THEME_SKIN_KEYS) {
+        overflowErrorCount++
+        if (overflowErrors.length < MAX_REPORTED_ERRORS) {
+          overflowErrors.push({
+            line: 0,
+            key: sub,
+            message: "unknown key \"" + sanitizeLabel(sub, 40) + "\""
+          })
+        }
+        continue
       }
+      var rawVal = shellValues[k]
+      if (typeof rawVal === "string" && rawVal.length > MAX_THEME_VALUE_LEN) {
+        rawVal = rawVal.slice(0, MAX_THEME_VALUE_LEN)
+      }
+      map[sub] = rawVal
+      keyCount++
+      found = true
     }
   }
-  if (!found) {
+  if (!found && overflowErrorCount === 0) {
     return {
       skin: null,
       appliedCount: 0,
@@ -1445,12 +1545,15 @@ function inspectShellValues(shellValues, lookup) {
       formatVersion: SKIN_FORMAT_VERSION,
       newerFormat: false,
       skippedKeys: [],
+      skippedCount: 0,
       skippedSummary: "",
       errors: [],
-      adjustments: []
+      errorCount: 0,
+      adjustments: [],
+      adjustmentCount: 0
     }
   }
-  var res = inspectKvMap(map, null, "theme-skin", "theme", lookup, [])
+  var res = inspectKvMap(map, null, "theme-skin", "theme", lookup, overflowErrors, overflowErrorCount)
   if (res.skin) res.skin.id = "theme-skin"
   return res
 }
@@ -2040,7 +2143,11 @@ if (typeof module !== "undefined") {
     REMOVE_SKIN_FILES_SCRIPT: REMOVE_SKIN_FILES_SCRIPT,
     REMOVE_IF_UNCHANGED_SCRIPT: REMOVE_IF_UNCHANGED_SCRIPT,
     READ_FILE_SCRIPT: READ_FILE_SCRIPT,
+    MAX_READ_FILE_BYTES: MAX_READ_FILE_BYTES,
     MAX_SCANNED_SKINS: MAX_SCANNED_SKINS,
+    MAX_SKIN_FILE_BYTES: MAX_SKIN_FILE_BYTES,
+    MAX_LIBRARY_DIAGNOSTICS: MAX_LIBRARY_DIAGNOSTICS,
+    MAX_THEME_SKIN_KEYS: MAX_THEME_SKIN_KEYS,
     SCAN_SKINS_SCRIPT: SCAN_SKINS_SCRIPT,
     pinnedScanSlugs: pinnedScanSlugs,
     parseSemver: parseSemver,

@@ -106,6 +106,7 @@
   "status.copied": "[bar-skin]-TOML in die Zwischenablage kopiert",
   "status.copyFailed": "Kopieren in die Zwischenablage fehlgeschlagen",
   "status.renamed": "Umbenannt in %1",
+  "status.renameChangedExternally": "%1 wurde extern geändert. Umbenennen abgebrochen.",
   "status.renamePartial": "%1 gespeichert, alte Datei konnte nicht entfernt werden",
   "status.deleted": "%1 gelöscht",
   "status.deleteFailed": "%1 konnte nicht gelöscht werden",

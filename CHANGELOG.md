@@ -21,10 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- **Bounded shared-file reads (`READ_FILE_SCRIPT`)**: files over 1 MiB are refused, and reads go through `head -c` so a file that grows after the size check is still bounded.
-- **Eliminated O(N²) unknown-key skip tracking & bounded adjustments**: `inspectKvMap` now deduplicates skipped keys in O(1) via a null-prototype set and caps/sanitizes both `errors` and `adjustments`.
-- **Hardened subprocess pipelines**: added `timeout -k 1 2` SIGKILL fallback for `wl-paste`, `set -o pipefail` + `--connect-timeout 4 --max-redirs 3` on the explicit `curl` update check, `[ ! -L "$dest" ]` guard before `chmod --reference` in `WRITE_FILE_SCRIPT`, and `--` before directory arguments in `inotifywait`.
-- **Safe notice substitution**: replaced `QString.arg()` on 0-arg notices in `StudioContent.qml` with `formatNotice()`, avoiding Qt missing-argument warnings and chained `%1`/`$&` expansion.
+- **Bounded diagnostic accumulation & theme skin input**: capped `syntaxErrors`, validation `errors`, `adjustments` (20 per file), library diagnostics (50 files), and theme `[bar-skin]` entries (`MAX_THEME_SKIN_KEYS = 100`, 512-char value cap) during parsing so malformed skin packs cannot allocate millions of diagnostic objects.
+- **External-edit protection on Rename**: `renameUserSkin` now checks the scanned file's MD5 hash on both same-file and cross-file renames (`expect` / `expectOld` in `WRITE_FILE_SCRIPT`), refusing or rolling back with a notice instead of overwriting or deleting external edits.
+- **Hardened skin scanner & shared-file reads**: `SCAN_SKINS_SCRIPT` now validates safe basenames before counting toward the 200-file scan quota and hard-bounds reads to `head -c 32769` + `jq` byte-length check so growing files cannot bypass the 32 KiB cap; `READ_FILE_SCRIPT` + `SkinStore.qml` cap reads at 1 MiB and reject overflow instead of silently truncating.
+- **Safe legacy `barcraft.toml` migration**: `loadState()` now confirms `shell.json` persistence before moving `barcraft.toml` to `.migrated` and falls back to `.migrated` if `bar.barcraft` is still absent.
+- **Supply-chain & subprocess hardening**: `tools/vendor-kit.js` reads directly from `git show HEAD:<path>` so `kit/` always matches `kit/KIT_REV`; CI workflows pin GitHub Actions to commit SHAs and isolate `issues: write` in a separate checkout-free job; added `timeout -k 1 2` SIGKILL fallback for `wl-paste`, `set -o pipefail` + `--connect-timeout 4 --max-redirs 3` on the explicit `curl` update check, `[ ! -L "$dest" ]` guard before `chmod --reference`, `--` on `inotifywait`, and safe `formatNotice()` substitution.
 
 ## [0.7.1] - 2026-11-25
 

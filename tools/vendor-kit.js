@@ -40,23 +40,39 @@ if (!src) {
   console.error('usage: node tools/vendor-kit.js /path/to/omarchy-ui [--check]')
   process.exit(2)
 }
-const ui = path.join(src, 'qt/qml/Omarchy/Ui')
-const theme = path.join(src, 'qt/qml/Omarchy/Theme')
 const rev = execFileSync('git', ['-C', src, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim()
 
+// Read directly from git HEAD so a dirty working tree in the source checkout
+// can never produce vendored files that diverge from kit/KIT_REV.
+function gitShow(relPath) {
+  return execFileSync('git', ['-C', src, 'show', `${rev}:${relPath}`], {
+    encoding: 'utf8',
+    maxBuffer: 10 * 1024 * 1024
+  })
+}
+function gitListDir(relDir) {
+  const raw = execFileSync('git', ['-C', src, 'ls-tree', '--name-only', rev, relDir + '/'], {
+    encoding: 'utf8'
+  }).trim()
+  return raw ? raw.split('\n').map(p => path.posix.basename(p)) : []
+}
+
 // Every kit type a file names, as `Name {` or `Name.member` of a type that exists.
-const known = fs.readdirSync(ui).filter(f => f.endsWith('.qml')).map(f => f.slice(0, -4))
+const known = gitListDir('qt/qml/Omarchy/Ui').filter(f => f.endsWith('.qml')).map(f => f.slice(0, -4))
 function uses(text) {
   return known.filter(name => new RegExp('(^|[^A-Za-z0-9_.])' + name + '\\s*\\{', 'm').test(text))
 }
 const take = []
 const queue = WANTED.slice()
+const uiSourceCache = {}
 while (queue.length) {
   const name = queue.shift()
   if (take.includes(name)) continue
   if (!known.includes(name)) throw new Error('the kit has no ' + name)
   take.push(name)
-  for (const dep of uses(fs.readFileSync(path.join(ui, name + '.qml'), 'utf8')))
+  const text = gitShow(`qt/qml/Omarchy/Ui/${name}.qml`)
+  uiSourceCache[name] = text
+  for (const dep of uses(text))
     if (!take.includes(dep)) queue.push(dep)
 }
 take.sort()
@@ -82,9 +98,9 @@ function rewriteTheme(text) {
 }
 
 const files = {}
-for (const name of take) files['Ui/' + name + '.qml'] = rewriteUi(fs.readFileSync(path.join(ui, name + '.qml'), 'utf8'), name)
+for (const name of take) files['Ui/' + name + '.qml'] = rewriteUi(uiSourceCache[name], name)
 for (const f of THEME) {
-  const text = fs.readFileSync(path.join(theme, f), 'utf8')
+  const text = gitShow(`qt/qml/Omarchy/Theme/${f}`)
   files['Theme/' + f] = f.endsWith('.qml') ? rewriteTheme(text) : text
 }
 for (const [f, text] of Object.entries(files))
@@ -92,7 +108,7 @@ for (const [f, text] of Object.entries(files))
     throw new Error(f + ' still imports a kit module by name')
 files['Ui/qmldir'] = take.map(n => n + ' 1.0 ' + n + '.qml').join('\n') + '\n'
 files['Theme/qmldir'] = SINGLETONS.map(n => 'singleton ' + n + ' 1.0 ' + n + '.qml').join('\n') + '\n'
-files['LICENSE'] = fs.readFileSync(path.join(src, 'LICENSE'), 'utf8')
+files['LICENSE'] = gitShow('LICENSE')
 files['KIT_REV'] = rev + '\n'
 
 let changed = 0
