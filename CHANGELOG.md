@@ -5,13 +5,14 @@ All notable changes to Barcraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.8.0] - 2026-11-28
 
 ### Added
 
 - **Unified Copy/Paste in the Studio header & contextual Draft bar**: **Copy** and **Paste** now sit once in the Studio hero header (acting on the selected display across every tab), and a single contextual Draft bar (**Save as skin name…**, **Save**, plus **Undo paste** or **Reset**) appears on every tab—including **Skins**—only while an unsaved edit or paste is active.
 - **Visible theme `[bar-skin]` errors**: when the active theme ships a `[bar-skin]` with validation errors (even if the error prevents it from loading), the **Skins** tab now shows a one-line diagnostic hint with the full list on hover.
 - **Share skins in Studio → About**: a **Share skins** button opens the pinned [Share your skin](https://github.com/thepixelgardener-create/barcraft/issues/4) thread, and **Check updates** / **Update** are now one button that changes with the update state.
+- **Animated WebP demo & refreshed 0.8 screenshots**: added `assets/barcraft-demo.webp` to the README and refreshed `assets/skins-showcase.webp`, `preview.webp`, and all five Studio tab screenshots for 0.8.0.
 
 ### Changed
 
