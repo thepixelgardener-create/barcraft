@@ -140,12 +140,20 @@ var MAX_SKIN_FILE_BYTES = 32768
 // to 32,769 bytes via `head` so a growing file cannot bypass the size cap.
 // Outputs `{rows: [{path, text}...], truncated: N}` with skipped counting
 // capped at 1000 so huge folders stay fast.
+// Every name-valid file counts toward one hard cap (limit + 1000), whatever
+// skips it, so a folder of oversized or unreadable files can't stall the scan.
+// Each row's hash is md5sum of the bytes read, not of jq's decoded text, so it
+// matches what the write scripts compare against even for non-UTF-8 files.
 var SCAN_SKINS_SCRIPT =
   "LC_ALL=C; export LC_ALL; " +
   "limit=$1; userdir=${2%/}; legacydir=${3%/}; shift 3; " +
+  "hard=$((limit + 1000)); " +
   "nl=$(printf '\\n_'); nl=${nl%_}; " +
-  "{ " +
-  "  n=0; skipped=0; seen=\"$nl\"; " +
+  "tmp=$(mktemp) || exit 1; trap 'rm -f -- \"$tmp\"' EXIT; " +
+  // The group sets the trap again: a watchdog kill ends sh, not the group,
+  // and its next write would otherwise leave a skin's bytes in $tmp.
+  "{ trap 'rm -f -- \"$tmp\"' EXIT; " +
+  "  n=0; skipped=0; looked=0; pinning=1; seen=\"$nl\"; " +
   "  emit() { " +
   "    f=$1; " +
   "    base=${f##*/}; " +
@@ -154,15 +162,19 @@ var SCAN_SKINS_SCRIPT =
   "    [ \"${#stem}\" -le 64 ] || return 0; " +
   "    case \"$stem\" in *[!A-Za-z0-9_-]*) return 0 ;; esac; " +
   "    [ ! -L \"$f\" ] && [ -f \"$f\" ] && [ -r \"$f\" ] || return 0; " +
+  // Only pinned paths are remembered: the folder pass can't repeat itself.
   "    case \"$seen\" in *\"$nl$f$nl\"*) return 0 ;; esac; " +
-  "    seen=\"$seen$f$nl\"; " +
+  "    [ \"$pinning\" = 1 ] && seen=\"$seen$f$nl\"; " +
+  "    looked=$((looked + 1)); " +
   "    size=$(stat -c %s -- \"$f\" 2>/dev/null || echo 999999); " +
   "    [ \"$size\" -le " + MAX_SKIN_FILE_BYTES + " ] || return 0; " +
   "    if [ \"$n\" -ge \"$limit\" ]; then " +
   "      skipped=$((skipped + 1)); " +
   "      return 0; " +
   "    fi; " +
-  "    row=$(head -c " + (MAX_SKIN_FILE_BYTES + 1) + " -- \"$f\" 2>/dev/null | jq -Rsc --arg path \"$f\" 'if utf8bytelength <= " + MAX_SKIN_FILE_BYTES + " then {path: $path, text: .} else empty end'); " +
+  "    head -c " + (MAX_SKIN_FILE_BYTES + 1) + " -- \"$f\" > \"$tmp\" 2>/dev/null || return 0; " +
+  "    h=$(md5sum < \"$tmp\"); h=${h%% *}; " +
+  "    row=$(jq -Rsc --arg path \"$f\" --arg hash \"$h\" 'if utf8bytelength <= " + MAX_SKIN_FILE_BYTES + " then {path: $path, hash: $hash, text: .} else empty end' < \"$tmp\"); " +
   "    [ -n \"$row\" ] || return 0; " +
   "    printf '%s\\n' \"$row\"; " +
   "    n=$((n + 1)); " +
@@ -172,11 +184,17 @@ var SCAN_SKINS_SCRIPT =
   "    [ -n \"$userdir\" ] && emit \"$userdir/$slug.toml\"; " +
   "    [ -n \"$legacydir\" ] && emit \"$legacydir/$slug.toml\"; " +
   "  done; " +
+  "  pinning=0; " +
   "  for d in \"$userdir\" \"$legacydir\"; do " +
   "    [ -n \"$d\" ] && [ -d \"$d\" ] || continue; " +
   "    for f in \"$d\"/*.toml; do " +
+  // At the cap, limit + 1000 files were looked at and at most limit loaded,
+  // so 1000+ were skipped: the doctor's "1000+" is exact.
+  "      if [ \"$looked\" -ge \"$hard\" ]; then " +
+  "        [ -e \"$f\" ] || [ -L \"$f\" ] || continue; " +
+  "        skipped=1000; break 2; " +
+  "      fi; " +
   "      emit \"$f\"; " +
-  "      [ \"$skipped\" -ge 1000 ] && break 2; " +
   "    done; " +
   "  done; " +
   "  printf '{\"__meta\":true,\"truncated\":%d}\\n' \"$skipped\"; " +
@@ -582,10 +600,14 @@ function oneOf(raw, list, fallback) {
 }
 
 function slugify(text) {
-  var s = String(text || "").trim().toLowerCase()
+  // Bounded input and a linear trim: /^-+|-+$/ backtracks quadratically on a
+  // long run of dashes, and ids come from untrusted skin files and pastes.
+  var s = String(text || "").slice(0, 256).trim().toLowerCase()
     .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-  return s.slice(0, 40) || "custom-skin"
+  var a = 0, b = s.length
+  while (a < b && s.charCodeAt(a) === 45) a++
+  while (b > a && s.charCodeAt(b - 1) === 45) b--
+  return s.slice(a, b).slice(0, 40) || "custom-skin"
 }
 
 function canonicalSkinId(id) {

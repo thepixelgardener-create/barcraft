@@ -18,7 +18,9 @@ Item {
   Loader {
     id: bezelLoader
     anchors.fill: parent
-    active: root.bezelActive
+    // visible is the effective one: a Canvas loaded under a hidden parent
+    // would never paint once shown, so load only while actually on screen.
+    active: root.bezelActive && root.visible
     sourceComponent: bezelComponent
   }
 

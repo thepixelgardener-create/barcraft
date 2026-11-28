@@ -351,6 +351,16 @@ Column {
     }
   }
 
+  // Puts the cursor on an already registered item by its key.
+  function moveCursorTo(key) {
+    for (var i = 0; i < navItems.length; i++) {
+      if (navItems[i].navKey === key) {
+        navCurrent = navItems[i]
+        return
+      }
+    }
+  }
+
   function unregisterNav(item) {
     var i = navItems.indexOf(item)
     if (i >= 0) {
@@ -487,7 +497,9 @@ Column {
           navKey: "copyHero"
           inHeader: true
           navGrid: true
-          readonly property bool isStandard: !!root.engine && (root.engine.revision, root.engine.standardFor(root.screenTarget))
+          // The committed switch, not standardFor(): that one turns false
+          // during a hover preview and would make Copy blink on and off.
+          readonly property bool isStandard: !!root.engine && root.engine.standard
           disabled: isStandard
           text: root.tr("action.copy", "Copy")
           iconText: "󰆏"
@@ -1421,7 +1433,12 @@ Column {
         navKey: "editMainDraft"
         inFooter: true
         text: root.tr("action.editMain", "Edit main")
-        onTriggered: root.selectScreenTarget("")
+        onTriggered: {
+          root.selectScreenTarget("")
+          // This notice hides on Main; hand the cursor to Main's name field
+          // instead of leaving it on a hidden button.
+          root.moveCursorTo("skinName")
+        }
       }
 
       ActionButton {

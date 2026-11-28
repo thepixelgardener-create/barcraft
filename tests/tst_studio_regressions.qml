@@ -7,38 +7,50 @@ Item {
   width: 480
   height: 360
 
-  // Mirrors StudioContent's keyTarget + hidden draftControls focus handback.
-  FocusScope {
-    id: keyCatcher
+  // Mirrors the real setup: KeyboardPanel loads Studio in a Loader with
+  // focus: true, and StudioContent's key catcher is a plain Item with
+  // Keys.priority BeforeItem, not a FocusScope. Without restoreKeys(), focus
+  // falls back to the Loader and keys never reach the catcher again.
+  property bool restoreEnabled: true
+  Loader {
+    id: contentLoader
+    focus: true
     width: 320
     height: 120
-    focus: true
-    property int keyHits: 0
-    property bool blocked: (draftControls.visible && nameField.activeFocus)
-    Keys.onPressed: function(event) {
-      if (blocked) return
-      keyHits++
-      event.accepted = true
-    }
-
-    function restoreKeys() {
-      Qt.callLater(function() { keyCatcher.forceActiveFocus() })
-    }
-
-    Column {
-      id: draftControls
-      width: parent.width
-      visible: true
-      onVisibleChanged: {
-        if (!visible && nameField.activeFocus) {
-          nameField.focus = false
-          keyCatcher.restoreKeys()
-        }
+    sourceComponent: Item {
+      id: keyCatcher
+      anchors.fill: parent
+      focus: true
+      property int keyHits: 0
+      property bool blocked: draftControls.visible && nameField.activeFocus
+      property alias draftControls: draftControls
+      property alias nameField: nameField
+      Keys.priority: Keys.BeforeItem
+      Keys.onPressed: function(event) {
+        if (blocked) return
+        keyHits++
+        event.accepted = true
       }
 
-      LineField {
-        id: nameField
-        maximumLength: 40
+      function restoreKeys() {
+        if (harness.restoreEnabled) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
+      }
+
+      Column {
+        id: draftControls
+        width: parent.width
+        visible: true
+        onVisibleChanged: {
+          if (!visible && nameField.activeFocus) {
+            nameField.focus = false
+            keyCatcher.restoreKeys()
+          }
+        }
+
+        LineField {
+          id: nameField
+          maximumLength: 40
+        }
       }
     }
   }
@@ -107,22 +119,35 @@ Item {
       compare(bezelOverlay.canvasLoaded, false)
     }
 
-    function test_hidingDraftFooterReleasesLineFieldFocusBackToKeyCatcher() {
-      draftControls.visible = true
-      nameField.forceActiveFocus()
-      tryCompare(nameField, "activeFocus", true)
-      compare(keyCatcher.blocked, true)
-
-      // Simulates clicking Save with mouse and the async save completing so
-      // draftControls hides while nameField still held activeFocus.
-      draftControls.visible = false
-      compare(nameField.activeFocus, false)
-      compare(keyCatcher.blocked, false)
-      tryCompare(keyCatcher, "activeFocus", true)
-
-      const before = keyCatcher.keyHits
+    // Hides the draft controls while the name field holds focus (Save
+    // clicked, the async save completing) and counts keys that still arrive.
+    function hideDraftWithFieldFocused(restore) {
+      harness.restoreEnabled = restore
+      const catcher = contentLoader.item
+      catcher.draftControls.visible = true
+      catcher.nameField.forceActiveFocus()
+      tryCompare(catcher.nameField, "activeFocus", true)
+      compare(catcher.blocked, true)
+      catcher.draftControls.visible = false
+      compare(catcher.nameField.activeFocus, false)
+      compare(catcher.blocked, false)
+      wait(30)
+      const before = catcher.keyHits
       keyClick(Qt.Key_Down)
-      compare(keyCatcher.keyHits, before + 1)
+      return catcher.keyHits - before
+    }
+
+    function test_hidingDraftFooterReleasesLineFieldFocusBackToKeyCatcher() {
+      compare(hideDraftWithFieldFocused(true), 1)
+      verify(contentLoader.item.activeFocus)
+    }
+
+    // Control: the same steps without restoreKeys() leave the keyboard dead,
+    // so the test above fails if the handback ever stops working.
+    function test_withoutRestoreKeysTheKeyboardGoesDead() {
+      compare(hideDraftWithFieldFocused(false), 0)
+      harness.restoreEnabled = true
+      contentLoader.item.forceActiveFocus()
     }
 
     function test_bottomAndRightBarSurfaceExpandDoesNotSlideStripAcrossDesktop() {

@@ -3102,7 +3102,7 @@ Item {
       var registryName = root.canonicalWidgetId(moduleName)
       var comp = w[registryName] ? w[registryName].component : null
       if (!comp && registryName === "thepixelgardener.barcraft")
-        return barcraftHost.studioWidgetComp || barcraftHost.ensureStudioWidgetComponent()
+        return barcraftHost.studioWidgetComp
       return comp
     }
     readonly property bool qmlCustom: customType === "qml"

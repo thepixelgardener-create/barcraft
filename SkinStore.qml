@@ -334,7 +334,25 @@ Item {
     }
     _scanAgain = false
     _scanStartGen = _hashGen
+    _scanTimedOut = false
     scanProc.running = true
+    scanWatchdog.restart()
+  }
+
+  // A scan stuck on a stalled read (a dead mount, a FIFO swapped in after the
+  // checks) is stopped, and the skins already listed stay as they are.
+  property bool _scanTimedOut: false
+  Timer {
+    id: scanWatchdog
+    // Generous: a slow login with a full library is not a stuck read.
+    interval: 60000
+    repeat: false
+    onTriggered: {
+      if (!scanProc.running) return
+      store._scanTimedOut = true
+      console.warn("Barcraft: scanning saved skins took too long; keeping the skins already listed")
+      scanProc.running = false
+    }
   }
 
   property real _skinWatchStartedAt: 0
@@ -440,18 +458,28 @@ Item {
           // read may be older than what is on disk. Publishing it would pair
           // an old skin with the new file's hash and let a later Save
           // overwrite the newer file. Scan again instead.
+          if (store._scanTimedOut) return
           if (store._hashGen > store._scanStartGen) {
             Qt.callLater(store.rescan)
             return
           }
-          var parsed = JSON.parse(text || "[]")
+          // A finished scan always prints its summary object. Nothing at all
+          // means it failed (no jq, no temp file), not an empty library.
+          if (!String(text || "").trim()) {
+            console.warn("Barcraft: could not scan saved skins; keeping the skins already listed")
+            return
+          }
+          var parsed = JSON.parse(text)
           var rows = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.rows) ? parsed.rows : [])
           var truncated = (!Array.isArray(parsed) && parsed && Number(parsed.truncated) > 0)
             ? Math.floor(Number(parsed.truncated)) : 0
           var hashes = {}
           for (var i = 0; i < rows.length; i++) {
             var r = rows[i]
-            if (r && r.path && typeof r.text === "string") hashes[r.path] = Qt.md5(r.text)
+            // The scan's hash is of the bytes on disk, which is what saves
+            // compare against; jq's text differs for non-UTF-8 files.
+            if (r && r.path && typeof r.text === "string")
+              hashes[r.path] = (typeof r.hash === "string" && /^[0-9a-f]{32}$/.test(r.hash)) ? r.hash : Qt.md5(r.text)
           }
           store.skinHashes = store._mergeScanHashes(hashes)
           store.truncatedSkinCount = truncated
@@ -464,6 +492,7 @@ Item {
       }
     }
     onExited: {
+      scanWatchdog.stop()
       if (store._scanAgain) {
         store._scanAgain = false
         Qt.callLater(store.rescan)

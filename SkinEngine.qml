@@ -657,7 +657,8 @@ Item {
       persistState()
       return
     }
-    standard = false
+    // Reset discards the Main draft and nothing else: Omarchy standard stays
+    // as it is (resetToPreset is the one that also switches it off).
     hasCustomDraft = false
     _setDraftBaseHash("", "")
     var found = findSkinById(activeSkinId)
@@ -667,6 +668,7 @@ Item {
   }
 
   function resetToPreset() {
+    standard = false
     resetTarget("")
   }
 
@@ -1176,6 +1178,18 @@ Item {
 
   property bool _pendingLegacyArchive: false
   property int _legacyArchiveTries: 0
+  // What moves once shell.json holds the state: barcraft.toml to .migrated
+  // after a migration, or .migrated to .migrated.restored after recovering
+  // from it, so the recovery runs once and a later reset of bar.barcraft
+  // (omarchy bar defaults) doesn't bring 0.2's settings back each time.
+  property var _legacyArchiveMove: []
+
+  function _startLegacyArchive(from, to) {
+    _legacyArchiveMove = [from, to]
+    _pendingLegacyArchive = true
+    _legacyArchiveTries = 0
+    _verifyAndArchiveLegacy()
+  }
 
   function _verifyAndArchiveLegacy() {
     if (!_pendingLegacyArchive || !isPrimary) return
@@ -1188,7 +1202,12 @@ Item {
       if (status === "ok" && SkinParser.shellJsonHasBarcraftState(text)) {
         engine._pendingLegacyArchive = false
         engine.migrated = true
-        engine.runCommand(["mv", "-n", "--", engine.legacyStatePath, engine.legacyStatePath + ".migrated"])
+        var move = engine._legacyArchiveMove && engine._legacyArchiveMove.length === 2
+          ? engine._legacyArchiveMove : [engine.legacyStatePath, engine.legacyStatePath + ".migrated"]
+        // Numbered backup instead of -n: a target left from an earlier move
+        // must not make this one a silent no-op (the source would then be
+        // migrated or recovered again on every reset).
+        engine.runCommand(["mv", "--backup=numbered", "--", move[0], move[1]])
         return
       }
       if (engine._legacyArchiveTries < 6) {
@@ -1236,13 +1255,8 @@ Item {
       if (hasLegacy) {
         var persisted = persistState()
         if (persisted) {
-          if (hasActiveLegacy) {
-            _pendingLegacyArchive = true
-            _legacyArchiveTries = 0
-            _verifyAndArchiveLegacy()
-          } else {
-            migrated = true
-          }
+          if (hasActiveLegacy) _startLegacyArchive(legacyStatePath, legacyStatePath + ".migrated")
+          else _startLegacyArchive(legacyStatePath + ".migrated", legacyStatePath + ".migrated.restored")
         }
       }
     }

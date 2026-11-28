@@ -61,7 +61,7 @@ omarchy-shell barcraft doctor                          # health report
 
 ## What Barcraft writes
 
-- `~/.config/omarchy/shell.json` → `bar.barcraft`: active skin, standard switch, per-monitor skins, preferences, and unsaved draft. (Barcraft 0.2's `~/.config/omarchy/barcraft.toml` migrates once to `barcraft.toml.migrated`.)
+- `~/.config/omarchy/shell.json` → `bar.barcraft`: active skin, standard switch, per-monitor skins, preferences, and unsaved draft. (Barcraft 0.2's `~/.config/omarchy/barcraft.toml` migrates once to `barcraft.toml.migrated`. If that state never reached `shell.json`, Barcraft recovers it from `.migrated` once, then renames the file `barcraft.toml.migrated.restored`.)
 - `~/.config/omarchy/bar/skins/*.toml`: skins you save in the Studio.
 - `~/.config/omarchy/shell.toml`: only when a skin sets `icon-scale` != `1.00`; writes `[bar]` icon tokens marked `# barcraft` and removes them again at `1.00`.
 - **Opt-in only** (toggled off by default in Studio → Behavior → Omarchy): a fenced `// barcraft:begin` … `// barcraft:end` block in `~/.config/omarchy/extensions/omarchy-menu.jsonc`, and `~/.config/omarchy/hooks/post-update.d/barcraft-sync`. Turning the toggles off removes them.

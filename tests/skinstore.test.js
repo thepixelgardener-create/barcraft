@@ -1005,6 +1005,7 @@ test("legacy barcraft.toml migration verifies shell.json on disk, handles placem
       _legacyWaits: 0,
       _pendingLegacyArchive: false,
       _legacyArchiveTries: 0,
+      _legacyArchiveMove: [],
       legacyStatePath: "/tmp/barcraft.toml",
       userShellJsonPath: "/tmp/shell.json",
       activeSkinId: "floating",
@@ -1053,7 +1054,7 @@ test("legacy barcraft.toml migration verifies shell.json on disk, handles placem
       runCommand: argv => commands.push(argv)
     })
     ctx.engine = ctx
-    for (const fn of ["stateJson", "_studioButtonChanged", "persistState", "applyState", "applyLegacyText", "_verifyAndArchiveLegacy", "loadState"]) {
+    for (const fn of ["stateJson", "_studioButtonChanged", "persistState", "applyState", "applyLegacyText", "_startLegacyArchive", "_verifyAndArchiveLegacy", "loadState"]) {
       vm.runInContext(method(fn), ctx)
     }
     ctx.loadState()
@@ -1114,17 +1115,79 @@ test("legacy barcraft.toml migration verifies shell.json on disk, handles placem
   assert.strictEqual(fromStub.commands.length, 1)
   assert.strictEqual(ensureCalls, 0)
 
-  // Fallback: barcraft.toml already moved to .migrated before shell.json wrote (even with placement-only stub) -> recovers without mv.
+  // Fallback: barcraft.toml already moved to .migrated before shell.json wrote (even with placement-only stub) -> recovers,
+  // then retires .migrated once shell.json holds the state, so the recovery is one-shot.
   const fallback = runCase({
     configBlock: { studioButtonPlaced: true },
     mutateOk: true,
-    migratedText: "[barcraft]\nactive-skin = \"editorial\"\n"
+    migratedText: "[barcraft]\nactive-skin = \"editorial\"\n",
+    diskReads: [{ status: "ok", text: JSON.stringify({ version: 1, bar: { barcraft: { skin: "editorial", studioButtonPlaced: true } } }) }]
   })
   assert.strictEqual(fallback.ctx.activeSkinId, "editorial")
   assert.strictEqual(fallback.ctx.studioButtonPlaced, true)
   assert.strictEqual(fallback.ctx.migrated, true)
   assert.strictEqual(fallback.persistedPayload.bar.barcraft.skin, "editorial")
-  assert.strictEqual(fallback.commands.length, 0)
+  assert.strictEqual(JSON.stringify(fallback.commands), JSON.stringify([["mv", "--backup=numbered", "--", "/tmp/barcraft.toml.migrated", "/tmp/barcraft.toml.migrated.restored"]]))
+
+  // Recovery whose shell.json write never lands keeps .migrated for the next start.
+  const fallbackUnverified = runCase({
+    mutateOk: true,
+    migratedText: "[barcraft]\nactive-skin = \"editorial\"\n",
+    diskReads: [{ status: "ok", text: JSON.stringify({ version: 1, bar: {} }) }]
+  })
+  assert.strictEqual(fallbackUnverified.ctx.activeSkinId, "editorial")
+  assert.strictEqual(fallbackUnverified.commands.length, 0)
+})
+
+test("SCAN_SKINS_SCRIPT cleans its temp file even when only sh is killed mid-scan", () => {
+  const env = makeTempEnv()
+  const tmpdir = fs.mkdtempSync(path.join(os.tmpdir(), "barcraft-scan-tmp-"))
+  const shim = fs.mkdtempSync(path.join(os.tmpdir(), "barcraft-scan-shim-"))
+  try {
+    for (let i = 0; i < 3; i++) fs.writeFileSync(path.join(env.userDir, "s" + i + ".toml"), "[bar-skin]\nheight = 30\n")
+    // A head that stalls, so SIGTERM reaches sh (as Quickshell sends it) while the group still runs.
+    fs.writeFileSync(path.join(shim, "head"), "#!/bin/sh\nsleep 0.6\nexec /usr/bin/head \"$@\"\n", { mode: 0o755 })
+    const driver = "sh -c \"$SCRIPT\" sh 5 \"$U\" \"$L\" >/dev/null 2>&1 & pid=$!; sleep 0.3; kill -TERM $pid; wait $pid; sleep 2.5"
+    const r = spawnSync("sh", ["-c", driver], {
+      encoding: "utf8",
+      env: Object.assign({}, process.env, { SCRIPT: P.SCAN_SKINS_SCRIPT, U: env.userDir, L: env.legacyDir, TMPDIR: tmpdir, PATH: shim + ":" + process.env.PATH })
+    })
+    assert.strictEqual(r.error, undefined)
+    assert.deepStrictEqual(fs.readdirSync(tmpdir), [], "temp file left behind")
+  } finally {
+    cleanupDir(env.root)
+    fs.rmSync(tmpdir, { recursive: true, force: true })
+    fs.rmSync(shim, { recursive: true, force: true })
+  }
+})
+
+test("SCAN_SKINS_SCRIPT hashes the bytes on disk and stops at a hard cap however files are skipped", () => {
+  const env = makeTempEnv()
+  try {
+    // A Latin-1 skin: jq's text holds U+FFFD, the hash must still match md5sum of the file.
+    const latin = path.join(env.userDir, "cafe.toml")
+    const bytes = Buffer.concat([Buffer.from("[bar-skin]\nname = \"Caf"), Buffer.from([0xe9]), Buffer.from("\"\n")])
+    fs.writeFileSync(latin, bytes)
+    // 1,200 oversized files: each is name-valid, so each counts toward limit + 1000.
+    for (let i = 0; i < 1200; i++) {
+      const f = path.join(env.userDir, "big-" + String(i).padStart(4, "0") + ".toml")
+      fs.closeSync(fs.openSync(f, "w"))
+      fs.truncateSync(f, 40000)
+    }
+    const t0 = Date.now()
+    const r = spawnSync("sh", ["-c", P.SCAN_SKINS_SCRIPT, "sh", "5", env.userDir, env.legacyDir, "cafe"], { encoding: "utf8" })
+    const elapsed = Date.now() - t0
+    assert.strictEqual(r.status, 0, r.stderr)
+    const parsed = JSON.parse(r.stdout)
+    const row = parsed.rows.find(x => x.path === latin)
+    assert.ok(row, "pinned Latin-1 skin missing")
+    assert.strictEqual(row.hash, crypto.createHash("md5").update(bytes).digest("hex"))
+    assert.strictEqual(parsed.rows.length, 1)
+    assert.strictEqual(parsed.truncated, 1000, "hitting the hard cap reports 1000+")
+    assert.ok(elapsed < 20000, "scan took " + elapsed + "ms")
+  } finally {
+    cleanupDir(env.root)
+  }
 })
 
 console.log("SkinStore: " + passed + " tests passed")

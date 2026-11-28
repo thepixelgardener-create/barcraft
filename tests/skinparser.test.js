@@ -721,6 +721,16 @@ test("SkinEngine handlers: single-pass scan, per-monitor editing/zones, diagnost
   assert.strictEqual(ctx.hasMonitorSkin("DP-2"), false)
   assert.strictEqual(ctx.committedSkinFor("DP-2").name, "Statusline")
   assert.ok(persists > 0)
+  // Reset discards the Main draft but leaves Omarchy standard on; resetToPreset switches it off.
+  ctx.standard = true
+  ctx.hasCustomDraft = true
+  ctx.resetTarget("")
+  assert.strictEqual(ctx.standard, true)
+  assert.strictEqual(ctx.hasCustomDraft, false)
+  ctx.hasCustomDraft = true
+  ctx.resetToPreset()
+  assert.strictEqual(ctx.standard, false)
+  assert.strictEqual(ctx.hasCustomDraft, false)
 })
 
 test("inspectToml distinguishes hard errors from clamped adjustments and suggests fixes", () => {
@@ -1156,6 +1166,18 @@ test("hasPersistedState and shellJsonHasBarcraftState reject placement-only stub
   assert.strictEqual(P.shellJsonHasBarcraftState(JSON.stringify({ version: 1, bar: {} })), false)
   assert.strictEqual(P.shellJsonHasBarcraftState(JSON.stringify({ version: 1, bar: { barcraft: { studioButtonPlaced: true } } })), false)
   assert.strictEqual(P.shellJsonHasBarcraftState(JSON.stringify({ version: 1, bar: { barcraft: { studioButtonPlaced: true, skin: "islands" } } })), true)
+})
+
+test("slugify stays linear on long dash runs and keeps its old results", () => {
+  const evil = "a" + "-".repeat(32700) + "b"
+  const t0 = Date.now()
+  P.slugify(evil)
+  P.normalizeSkin({ id: evil, name: "x", preset: evil }, "imported", "custom")
+  assert.ok(Date.now() - t0 < 100, "slugify took " + (Date.now() - t0) + "ms")
+  assert.strictEqual(P.slugify("  My Skin!  "), "my-skin")
+  assert.strictEqual(P.slugify("--Neon__Glow--"), "neon__glow")
+  assert.strictEqual(P.slugify("***"), "custom-skin")
+  assert.strictEqual(P.slugify("x".repeat(60)), "x".repeat(40))
 })
 
 console.log("SkinParser: " + passed + " tests passed")

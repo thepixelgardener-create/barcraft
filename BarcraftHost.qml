@@ -34,45 +34,19 @@ Item {
   // returns "bar-option" first for dual-kind bar + bar-widget plugins and
   // leaves their barWidgetRegistry entry with component: null even when placed
   // in bar.layout.
+  // Created once with the host as its parent, so it goes with the host and is
+  // never destroyed by hand (the engine may free a parentless one first on a
+  // shell reload). Bar.qml's widget binding only reads it, so nothing writes
+  // state while that binding evaluates.
   property var studioWidgetComp: null
-  property var _studioWidgetPending: null
-  function ensureStudioWidgetComponent() {
-    if (studioWidgetComp) return studioWidgetComp
-    if (_studioWidgetPending) return null
-    var comp = Qt.createComponent(Qt.resolvedUrl("BarWidget.qml"))
-    if (comp.status === Component.Ready) {
-      studioWidgetComp = comp
-      return comp
+  Component.onCompleted: {
+    var comp = Qt.createComponent(Qt.resolvedUrl("BarWidget.qml"), Component.PreferSynchronous, host)
+    function settle() {
+      if (comp.status === Component.Ready) host.studioWidgetComp = comp
+      else if (comp.status === Component.Error) console.warn("Barcraft: fallback BarWidget load failed: " + comp.errorString())
     }
-    if (comp.status === Component.Loading) {
-      _studioWidgetPending = comp
-      comp.statusChanged.connect(function() {
-        if (comp.status === Component.Ready) {
-          host.studioWidgetComp = comp
-          host._studioWidgetPending = null
-        } else if (comp.status === Component.Error) {
-          console.warn("Barcraft: fallback BarWidget load failed: " + comp.errorString())
-          host._studioWidgetPending = null
-          comp.destroy()
-        }
-      })
-      return null
-    }
-    if (comp.status === Component.Error) {
-      console.warn("Barcraft: fallback BarWidget load failed: " + comp.errorString())
-      comp.destroy()
-    }
-    return null
-  }
-  Component.onDestruction: {
-    if (_studioWidgetPending) {
-      _studioWidgetPending.destroy()
-      _studioWidgetPending = null
-    }
-    if (studioWidgetComp) {
-      studioWidgetComp.destroy()
-      studioWidgetComp = null
-    }
+    if (comp.status === Component.Loading) comp.statusChanged.connect(settle)
+    else settle()
   }
 
   // Omarchy's shipped shell.json, read only when first-run placement finds no

@@ -89,7 +89,7 @@
   "action.paste": "Skin einfügen",
   "action.pasteShort": "Einfügen",
   "action.undoPaste": "Einfügen rückgängig",
-  "action.editMain": "Haupt-Skin",
+  "action.editMain": "Haupt-Skin bearbeiten",
   "action.shareSkins": "Skins teilen",
   "tooltip.copyToml": "Aktiven Skin als [bar-skin]-TOML kopieren",
   "tooltip.copyStandard": "Omarchy-Standard ausschalten, um einen Skin zu kopieren",
