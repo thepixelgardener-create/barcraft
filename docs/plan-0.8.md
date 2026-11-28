@@ -137,7 +137,7 @@ Written 2026-11-25. This replaces the two earlier drafts of the 0.8 plan.
 ### Remaining before tagging 0.8.0
 
 - ~~**Public share thread (#4):**~~ Done 2026-11-27: pinned issue [#4 "Share your skin"](https://github.com/thepixelgardener-create/barcraft/issues/4) with the `skin` label. `SkinEngine.shareSkinsUrl`, the README and `docs/skins.md` point to it.
-- **Refresh the README screenshots** in `assets/` (still from 0.4.0): the Skins tab no longer has **Paste skin** in its footer. Copy and Paste now sit in the Studio header.
+- ~~**Refresh the README screenshots** in `assets/` (still from 0.4.0):~~ Done 2026-11-28: refreshed all 5 Studio screenshots, the 9-skin showcase (`assets/skins-showcase.webp` & `preview.webp`), `assets/social-preview.png`, and added an animated WebP demo (`assets/barcraft-demo.webp`).
 - **Two-person swap test:** you and one other person each send the other a skin, starting from opening Studio, without help: copy, send, paste, keep or undo, then go back to your own skin or Omarchy standard. Every spot where either of you hesitates is a bug to fix before tagging `0.8.0`.
 - ~~**Release check:**~~ Passed on `dev` 2026-11-27 (Hyprland 0.57.2-9, Qt 6.12.1, omarchy-dev r8457, whose bar is unchanged since r8442): node tests, `qmltestrunner` offscreen, `omarchy plugin validate .`, `omarchy agent look plugin .`, `scripts/sync-upstream.sh --check`. Re-run after any fix from the swap test, then bump `manifest.json` to 0.8.0.
 

@@ -10,14 +10,17 @@
 
 Barcraft (`thepixelgardener.barcraft`) layers a zero-motion skin engine and keyboard-driven Studio onto Omarchy's own bar. Every built-in and third-party `bar-widget`, popup, drag-and-drop layout, and multi-monitor setup keeps working unchanged, while settings live in `shell.json` and `"auto"` tokens follow your Omarchy theme and Hyprland geometry.
 
-![Barcraft skins showcase](assets/skins-showcase.webp)
+![Barcraft Studio live-switching across all built-in skins](assets/barcraft-demo.webp)
 
 ## What's included
 
 - **9 built-in skins** — Classic: `Floating`, `Islands`, `Frosted`, `Capsule`, `Editorial`, `Statusline` *(compact 26px high-contrast developer bar with outlined widget chips)*. Wild Craft (still art): `Matrix`, `Runeforge`, `Amiga`.
-- **Omarchy standard switch** — jump back to pixel-identical stock `omarchy.bar` anytime while keeping the Studio and saved skins ready.
-- **Keyboard-first Studio** — hover or move the cursor (`hjkl`/arrows) to preview live, edit colors/geometry/surface/behavior, assign per-monitor skins, and copy/paste skins as TOML.
+- **Omarchy standard switch** — jump back to pixel-identical stock `omarchy.bar` anytime while keeping Studio and saved skins ready.
+- **Keyboard-first Studio** — hover or move the cursor (`hjkl`/arrows) to preview live, edit colors, geometry, surface, and behavior, and assign per-monitor skins across displays.
+- **Share the look, keep your widgets** — **Copy** and **Paste** `[bar-skin]` TOML from the Studio header with strict validation, line-level diagnostics, and one-click **Undo paste**.
 - **Theme-native & still** — live `theme.<key>` swatches follow theme switches with automatic WCAG 4.5:1 ink contrast and zero looping animations.
+
+![All 9 built-in Barcraft skins](assets/skins-showcase.webp)
 
 <details>
 <summary>Studio screenshots (Skins · Colors · Geometry · Surface · Behavior)</summary>
@@ -63,7 +66,7 @@ omarchy plugin remove thepixelgardener.barcraft
 
 Every skin is a plain `[bar-skin]` TOML block. You can make one in three ways:
 
-1. **In Barcraft Studio** — pick a starting preset, tweak colors, geometry, surface, or widgets live, then click **Save** (writes `~/.config/omarchy/bar/skins/<name>.toml`) or **Copy** at the top of Studio to share it. Post skins in the pinned **[Share your skin](https://github.com/thepixelgardener-create/barcraft/issues/4)** thread; to try one, copy it and press **Paste** in Studio. Your widgets and layout stay, and **Undo paste** goes back.
+1. **In Barcraft Studio** — pick a starting preset, tweak colors, geometry, surface, or widgets live, then **Save** from the draft bar (writes `~/.config/omarchy/bar/skins/<name>.toml`) or press **Copy** at the top of Studio to share it. Post skins in the pinned **[Share your skin](https://github.com/thepixelgardener-create/barcraft/issues/4)** thread; to try one, copy it and press **Paste** in Studio. Your widgets and layout stay, and **Undo paste** goes back.
 2. **As a standalone TOML file** — drop a `.toml` file into `~/.config/omarchy/bar/skins/`. Start from any built-in `preset` and override only what you want:
 
    ```toml
@@ -80,6 +83,7 @@ See the **[Skin Authoring Guide](docs/skins.md)** for the full `[bar-skin]` TOML
 
 ## Docs & Links
 
+- **[Share your skin](https://github.com/thepixelgardener-create/barcraft/issues/4)** — community `[bar-skin]` TOML thread
 - **[Skin Authoring Guide & TOML Reference](docs/skins.md)** — creating, sharing, theme-shipping, and contributing skins
 - **[Keybindings, IPC, Omarchy Integration & Development](docs/reference.md)** — `bindings.lua`, `omarchy-shell barcraft` commands, files written, tests, and upstream sync
 - **[Changelog](CHANGELOG.md)** — release history
