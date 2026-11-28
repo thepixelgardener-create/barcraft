@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Synced upstream Omarchy bar (`r8313` → `r8442`) & extracted bar helpers**: adopted Omarchy's strip-sized `PanelWindow` and two-frame `frameSwapped` resize-settle state machine (shrinking the `omarchy-bar` Wayland layer surface from full-screen to the bar strip plus floating gap and shadow padding), fixed floating-bar clearance in `thicknessFor()` so panels, popups, notifications, and widget drag removal clear the floating edge gap cleanly, and extracted `BarcraftHost.qml`, `BarAutoHide.qml`, `SkinSurface.qml`, and `StudioSkinCard.qml` to reduce the upstream merge footprint.
 - **Bar stays in view while you edit**: while Studio is open the bar holds its surface at full screen (input still only on the strip), so dragging a size slider or previewing skins no longer blanks the strip on every step; it shrinks back to the strip once Studio closes.
 - **Calmer Colors tab**: moved **Fixed colors** inside the expandable **Custom** drawer so the default view highlights live `theme.<key>` swatches.
+- **Lazy art and bezel canvases**: `BarArtLayer` and `BarBezelOverlay` now instantiate their 2D `Canvas` on demand via `Loader` (skipping hidden island/main surfaces and destroying unused canvases immediately), avoiding hidden Canvas allocations across the bar and Studio thumbnails.
 
 ### Security
 

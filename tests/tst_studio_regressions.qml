@@ -77,9 +77,35 @@ Item {
     }
   }
 
+  BarBezelOverlay {
+    id: bezelOverlay
+    width: 240
+    height: 30
+    bezelStyle: "none"
+    strength: 0.75
+    radius: 8
+  }
+
   TestCase {
     name: "StudioRegressions"
     when: windowShown
+
+    function test_bezelOverlayLoadsCanvasLazilyOnlyWhenActive() {
+      bezelOverlay.bezelStyle = "none"
+      compare(bezelOverlay.visible, false)
+      compare(bezelOverlay.canvasLoaded, false)
+
+      bezelOverlay.bezelStyle = "glass"
+      compare(bezelOverlay.visible, true)
+      compare(bezelOverlay.canvasLoaded, true)
+
+      bezelOverlay.bezelStyle = "raised"
+      compare(bezelOverlay.canvasLoaded, true)
+
+      bezelOverlay.bezelStyle = "none"
+      compare(bezelOverlay.visible, false)
+      compare(bezelOverlay.canvasLoaded, false)
+    }
 
     function test_hidingDraftFooterReleasesLineFieldFocusBackToKeyCatcher() {
       draftControls.visible = true

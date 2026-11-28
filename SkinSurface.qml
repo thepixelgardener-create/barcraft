@@ -53,7 +53,7 @@ Item {
 
     BarBezelOverlay {
       anchors.fill: parent
-      bezelStyle: surface.clear ? "none" : surface.look.bezel
+      bezelStyle: (surface.clear || !surface.visible) ? "none" : surface.look.bezel
       strength: surface.look ? surface.look.bezelStrength : 0.75
       radius: parent.radius
       accentColor: surface.look ? surface.look.resolvedAccent : "white"
