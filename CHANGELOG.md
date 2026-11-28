@@ -5,6 +5,46 @@ All notable changes to Barcraft are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-28
+
+### Added
+
+- **Unified Copy/Paste in the Studio header & contextual Draft bar**: **Copy** and **Paste** now sit once in the Studio hero header (acting on the selected display across every tab), and a single contextual Draft bar (**Save as skin name…**, **Save**, plus **Undo paste** or **Reset**) appears on every tab—including **Skins**—only while an unsaved edit or paste is active.
+- **Visible theme `[bar-skin]` errors**: when the active theme ships a `[bar-skin]` with validation errors (even if the error prevents it from loading), the **Skins** tab now shows a one-line diagnostic hint with the full list on hover.
+- **Share skins in Studio → About**: a **Share skins** button opens the pinned [Share your skin](https://github.com/thepixelgardener-create/barcraft/issues/4) thread, and **Check updates** / **Update** are now one button that changes with the update state.
+- **Animated WebP demo & refreshed 0.8 screenshots**: added `assets/barcraft-demo.webp` to the README and refreshed `assets/skins-showcase.webp`, `preview.webp`, and all five Studio tab screenshots for 0.8.0.
+
+### Changed
+
+- **Synced upstream Omarchy bar (`r8313` → `r8442`) & extracted bar helpers**: adopted Omarchy's strip-sized `PanelWindow` and two-frame `frameSwapped` resize-settle state machine (shrinking the `omarchy-bar` Wayland layer surface from full-screen to the bar strip plus floating gap and shadow padding), fixed floating-bar clearance in `thicknessFor()` so panels, popups, notifications, and widget drag removal clear the floating edge gap cleanly, and extracted `BarcraftHost.qml`, `BarAutoHide.qml`, `SkinSurface.qml`, and `StudioSkinCard.qml` to reduce the upstream merge footprint.
+- **Bar stays in view while you edit**: while Studio is open the bar holds its surface at full screen (input still only on the strip), so dragging a size slider or previewing skins no longer blanks the strip on every step; it shrinks back to the strip once Studio closes.
+- **Calmer Colors tab**: moved **Fixed colors** inside the expandable **Custom** drawer so the default view highlights live `theme.<key>` swatches.
+- **Lazy art and bezel canvases**: `BarArtLayer` and `BarBezelOverlay` now instantiate their 2D `Canvas` on demand via `Loader` (skipping hidden island/main surfaces and destroying unused canvases immediately), avoiding hidden Canvas allocations across the bar and Studio thumbnails.
+
+### Security
+
+- **Bounded diagnostic accumulation & theme skin input**: capped `syntaxErrors`, validation `errors`, `adjustments` (20 per file), library diagnostics (50 files, diagnosing broken inherited presets only once), and theme `[bar-skin]` entries (`MAX_THEME_SKIN_KEYS = 100`, 512-char value cap) during parsing so malformed skin packs cannot allocate millions of diagnostic objects.
+- **External-edit protection on Rename**: `renameUserSkin` now checks the scanned file's MD5 hash on both same-file and cross-file renames (`expect` / `expectOld` in `WRITE_FILE_SCRIPT`), refusing or rolling back with a notice instead of overwriting or deleting external edits, and verifying `$dest` still matches our write before any rollback unlink.
+- **Hardened skin scanner & shared-file reads**: `SCAN_SKINS_SCRIPT` now validates safe basenames before counting toward the 200-file scan quota and hard-bounds reads to `head -c 32769` + `jq` byte-length check so growing files cannot bypass the 32 KiB cap; `READ_FILE_SCRIPT` enforces the 1 MiB byte cap in-script before writing stdout so growing multi-byte UTF-8 files can never return a truncated prefix.
+- **Safe legacy `barcraft.toml` migration**: `loadState()` now recovers legacy `barcraft.toml` / `.migrated` even when `bar.barcraft` only holds `{ studioButtonPlaced: true }`, and verifies persisted `bar.barcraft` state has actually landed in `shell.json` on disk before moving `barcraft.toml` to `.migrated`.
+- **No shell freeze from crafted skin ids**: `slugify` trimmed dashes with a regex that took quadratic time, so a skin file or paste with `id` or `preset` set to a long run of dashes froze the shell (about 1 s per paste, minutes for a folder of such files). It now trims in linear time on input capped at 256 characters, with the same results for real ids.
+- **Skin scan can't stall**: every file the scan looks at counts toward one hard cap (200 + 1000), so a folder of oversized files no longer keeps it busy for minutes. A 60 s watchdog stops a stuck scan and keeps the skins already listed, a failed scan no longer empties the library, and the scan's temp file is removed even when the scan is killed.
+- **Supply-chain & subprocess hardening**: `tools/vendor-kit.js` reads directly from `git show HEAD:<path>` so `kit/` always matches `kit/KIT_REV`; CI workflows pin GitHub Actions to commit SHAs and isolate `issues: write` in a separate checkout-free job; added `timeout -k 1 2` SIGKILL fallback for `wl-paste`, `set -o pipefail` + `--connect-timeout 4 --max-redirs 3` on the explicit `curl` update check, `[ ! -L "$dest" ]` guard before `chmod --reference`, `--` on `inotifywait`, and safe `formatNotice()` substitution.
+
+### Fixed
+
+- **Studio keyboard shortcuts after mouse Save**: clicking **Save**, **Reset**, or **Undo paste** while the skin name field had focus (or closing the Draft bar) now clears field focus and hands keyboard control back to the panel key catcher instead of trapping focus in a hidden input.
+- **Bottom and right bar opening Studio**: `Bar.qml` now animates only the edge-slide offset (`animatedEdgeOffset`) instead of `barStrip`'s `x`/`y`, so expanding or shrinking the layer surface when Studio opens or closes keeps bottom and right bars anchored at their screen edge instead of sliding across the desktop.
+- **Copy disabled in Omarchy standard mode**: **Copy** in the Studio header (and `copyToml`) now refuses to silently export the hidden skin underneath Omarchy standard, showing a clear hint instead.
+- **Shared edits visible when targeting a clean monitor**: changing shared settings (**Icon size**, **Glass blur**) while editing a clean display now surfaces a footer notice with **Edit main** and **Reset** controls so the resulting Main-skin draft isn't hidden.
+- **Accurate theme `[bar-skin]` error overflow count**: the **Skins** tab diagnostic hint now reports the true total error count (`errorCount - 1`) instead of counting the capped display array.
+- **Old 0.2 settings stay gone after a reset**: recovering 0.2 settings from `barcraft.toml.migrated` now happens once. After the state reaches `shell.json`, the file is renamed `barcraft.toml.migrated.restored`, so `omarchy bar defaults` (or removing `bar.barcraft`) no longer brings the old skin back on every start.
+- **Rename and overwrite of non-UTF-8 skin files**: the scan now hashes the bytes on disk rather than the decoded text, so a skin saved in Latin-1 no longer reports "changed on disk" on every rename or save.
+- **Reset keeps Omarchy standard on**: **Reset** on the Main draft (from Main or from the notice on a monitor tab) discards the unsaved edits only; it no longer also switches Omarchy standard off on every bar.
+- **Studio polish**: **Copy** no longer blinks on and off while hovering skins in Omarchy standard, **Edit main** puts the keyboard cursor on Main's name field instead of a hidden button, and the German label reads "Haupt-Skin bearbeiten".
+- **Quiet shell log**: the Studio button fallback no longer logs a binding loop on every shell start or a `TypeError` when the shell reloads, and a bezel loaded under a hidden parent now paints once shown.
+- **Studio button fallback on Omarchy `r8499+`**: falls back to loading Barcraft's own `BarWidget.qml` when Omarchy's `PluginRegistry.inBar()` returns `false` for dual-kind `bar` + `bar-widget` plugins and leaves the registry entry with `component: null`.
+
 ## [0.7.1] - 2026-11-25
 
 ### Added

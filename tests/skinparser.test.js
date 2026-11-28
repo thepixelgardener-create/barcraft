@@ -721,6 +721,16 @@ test("SkinEngine handlers: single-pass scan, per-monitor editing/zones, diagnost
   assert.strictEqual(ctx.hasMonitorSkin("DP-2"), false)
   assert.strictEqual(ctx.committedSkinFor("DP-2").name, "Statusline")
   assert.ok(persists > 0)
+  // Reset discards the Main draft but leaves Omarchy standard on; resetToPreset switches it off.
+  ctx.standard = true
+  ctx.hasCustomDraft = true
+  ctx.resetTarget("")
+  assert.strictEqual(ctx.standard, true)
+  assert.strictEqual(ctx.hasCustomDraft, false)
+  ctx.hasCustomDraft = true
+  ctx.resetToPreset()
+  assert.strictEqual(ctx.standard, false)
+  assert.strictEqual(ctx.hasCustomDraft, false)
 })
 
 test("inspectToml distinguishes hard errors from clamped adjustments and suggests fixes", () => {
@@ -1037,7 +1047,8 @@ test("StudioContent only honours an overwrite confirmation on the target it was 
     nameField: { text: "Neon" },
     overwriteTimer: { restart() {}, stop() {} },
     showStatus() {},
-    tr: k => ({ arg: () => k }),
+    formatNotice: (t, a) => String(t).replace("%1", () => String(a || "")),
+    tr: k => k,
     engine: {
       committedSkinFor: () => ({ name: "Neon" }),
       saveUserSkin: (name, force, target) => { calls.push({ name, force, target }); return { ok: true } }
@@ -1071,6 +1082,102 @@ test("pinnedScanSlugs collects active, monitor, draft, renamed-reserved, and rec
     "zzz-dp2-draft",
     "real-file"
   ])
+})
+
+test("format=2 with thousands of unknown keys stays O(N) and bounds skippedKeys and adjustments", () => {
+  let text = "[bar-skin]\nformat = 2\nheight = 999\n"
+  for (let i = 0; i < 1500; i++) text += "future_key_" + i + " = 1\n"
+  const t0 = Date.now()
+  const res = P.inspectToml(text, "imported", "custom")
+  const elapsed = Date.now() - t0
+  assert.ok(elapsed < 500, "inspectToml took too long: " + elapsed + "ms")
+  assert.strictEqual(res.errors.length, 0)
+  assert.strictEqual(res.skippedKeys.length, 8)
+  assert.strictEqual(res.skippedCount, 1500)
+  assert.ok(/\+1492$/.test(res.skippedSummary))
+  assert.ok(res.adjustments.length <= 21)
+  for (const a of res.adjustments) assert.ok(a.message.length <= 160)
+})
+
+test("StudioContent formatNotice handles 0-arg strings and literal $&/%1 safely", () => {
+  const fs = require("fs")
+  const vm = require("vm")
+  const qml = fs.readFileSync(path.join(__dirname, "..", "StudioContent.qml"), "utf8")
+  const m = qml.match(/^  (function formatNotice\([\s\S]*?^  \})/m)
+  assert.ok(m, "missing formatNotice in StudioContent.qml")
+  const ctx = vm.createContext({})
+  vm.runInContext(m[1], ctx)
+  assert.strictEqual(ctx.formatNotice("Copied to clipboard", ""), "Copied to clipboard")
+  assert.strictEqual(ctx.formatNotice("Pasted %1", "A $& %2 skin"), "Pasted A $& %2 skin")
+})
+
+test("malformed skin packs and oversized theme bar-skin maps stay bounded during accumulation", () => {
+  const dir = "/tmp/barcraft-hostile-pack"
+  const badBody = "[bar-skin]\n" + "not valid toml line\n".repeat(400)
+  const rows = []
+  for (let i = 0; i < 200; i++) {
+    rows.push({ path: dir + "/bad-" + String(i).padStart(3, "0") + ".toml", text: badBody })
+  }
+  const t0 = Date.now()
+  const lib = P.parseSkinLibraryDetailed(rows, [dir])
+  assert.ok(Date.now() - t0 < 500, "hostile 200-file pack took too long")
+  assert.strictEqual(lib.diagnostics.length, P.MAX_LIBRARY_DIAGNOSTICS + 1)
+  assert.ok(/…and 150 more files/.test(lib.diagnostics[P.MAX_LIBRARY_DIAGNOSTICS].errors[0].message))
+  assert.strictEqual(lib.diagnostics[0].errors.length, 21)
+  assert.ok(/…and 380 more/.test(lib.diagnostics[0].errors[20].message))
+
+  const hugeTheme = { "bar-skin.height": "34" }
+  for (let k = 0; k < 500; k++) hugeTheme["bar-skin.bogus-" + k] = "x".repeat(4000)
+  const themeRes = P.inspectShellValues(hugeTheme, () => null)
+  assert.ok(themeRes.skin && themeRes.skin.height === 34)
+  assert.strictEqual(themeRes.errors.length, 21)
+  assert.strictEqual(themeRes.errorCount, 500)
+  assert.ok(/…and 480 more/.test(themeRes.errors[20].message))
+  for (const e of themeRes.errors) assert.ok(e.message.length <= 160)
+})
+
+test("parseSkinLibraryDetailed diagnoses a broken inherited preset only once and skips failed renames", () => {
+  const dir = "/tmp/barcraft-broken-parent"
+  const rows = [
+    { path: dir + "/broken.toml", text: "[bar-skin]\nheight = \"not-a-number\"\n" },
+    { path: dir + "/standard.toml", text: "[bar-skin]\nbogus_key = 1\n" }
+  ]
+  for (let i = 0; i < 6; i++) {
+    rows.push({
+      path: dir + "/child-" + i + ".toml",
+      text: "[bar-skin]\npreset = \"broken\"\nheight = 34\n"
+    })
+  }
+  const lib = P.parseSkinLibraryDetailed(rows, [dir])
+  const brokenDiags = lib.diagnostics.filter(d => d.path === dir + "/broken.toml")
+  assert.strictEqual(brokenDiags.length, 1, "broken parent should be diagnosed once, got " + brokenDiags.length)
+  assert.strictEqual(lib.renamedIds.standard, undefined, "failed reserved-name file must not enter renamedIds")
+})
+
+test("hasPersistedState and shellJsonHasBarcraftState reject placement-only stubs and invalid JSON", () => {
+  assert.strictEqual(P.hasPersistedState(null), false)
+  assert.strictEqual(P.hasPersistedState({}), false)
+  assert.strictEqual(P.hasPersistedState({ studioButtonPlaced: true }), false)
+  assert.strictEqual(P.hasPersistedState({ skin: "floating" }), true)
+  assert.strictEqual(P.hasPersistedState({ studioButtonPlaced: true, skin: "islands" }), true)
+
+  assert.strictEqual(P.shellJsonHasBarcraftState(""), false)
+  assert.strictEqual(P.shellJsonHasBarcraftState("{not valid json"), false)
+  assert.strictEqual(P.shellJsonHasBarcraftState(JSON.stringify({ version: 1, bar: {} })), false)
+  assert.strictEqual(P.shellJsonHasBarcraftState(JSON.stringify({ version: 1, bar: { barcraft: { studioButtonPlaced: true } } })), false)
+  assert.strictEqual(P.shellJsonHasBarcraftState(JSON.stringify({ version: 1, bar: { barcraft: { studioButtonPlaced: true, skin: "islands" } } })), true)
+})
+
+test("slugify stays linear on long dash runs and keeps its old results", () => {
+  const evil = "a" + "-".repeat(32700) + "b"
+  const t0 = Date.now()
+  P.slugify(evil)
+  P.normalizeSkin({ id: evil, name: "x", preset: evil }, "imported", "custom")
+  assert.ok(Date.now() - t0 < 100, "slugify took " + (Date.now() - t0) + "ms")
+  assert.strictEqual(P.slugify("  My Skin!  "), "my-skin")
+  assert.strictEqual(P.slugify("--Neon__Glow--"), "neon__glow")
+  assert.strictEqual(P.slugify("***"), "custom-skin")
+  assert.strictEqual(P.slugify("x".repeat(60)), "x".repeat(40))
 })
 
 console.log("SkinParser: " + passed + " tests passed")

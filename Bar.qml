@@ -721,110 +721,21 @@ Item {
     if (activePopout === owner) activePopout = null
   }
 
-  // Barcraft: Omarchy's shipped shell.json, read only when first-run placement
-  // finds no bar.layout at all, so the write keeps every stock widget.
-  FileView {
-    id: stockShellDefaultsFile
-    path: (root.omarchyPath || "/usr/share/omarchy") + "/config/omarchy/shell.json"
-    preload: false
-    blockAllReads: true
-    watchChanges: false
-    printErrors: false
-  }
-
-  // Omarchy's stock layout, or null when it can't be read: placement then
-  // writes nothing rather than a layout that drops stock widgets.
-  function stockFallbackLayout() {
-    var raw = ""
-    try {
-      raw = String(stockShellDefaultsFile.text() || "").trim()
-    } catch (e) {}
-    if (!raw) return null
-    try {
-      var parsed = JSON.parse(raw)
-      if (parsed && Util.isPlainObject(parsed.bar) && Util.isPlainObject(parsed.bar.layout)) return parsed.bar.layout
-    } catch (e2) {}
-    console.warn("Barcraft: could not read Omarchy's stock bar layout from " + stockShellDefaultsFile.path)
-    return null
-  }
-
-  // Puts the Studio button on the bar when it belongs there (first run, or
-  // `force` for restoreButton). Returns "restored" when it was added or moved,
-  // "flagged" when only the placed marker was recorded, "present" when nothing
-  // needed to change and "error" when shell.json can't be written.
-  function ensureStudioButton(force) {
-    if (!root.shell || typeof root.shell.mutateShellConfig !== "function") return "error"
-    var id = "thepixelgardener.barcraft"
-    var options = { force: !!force }
-    var fallback = function() { return root.stockFallbackLayout() }
-    var probe = { bar: JSON.parse(JSON.stringify(Util.isPlainObject(root.barConfig) ? root.barConfig : {})) }
-    var reachableBefore = BarModel.studioButtonPlacement(probe.bar.layout, id).reachable
-    if (!BarModel.placeStudioButton(probe, id, fallback, options)) return "present"
-    var changed = false
-    var ok = root.shell.mutateShellConfig(function(config) {
-      if (BarModel.placeStudioButton(config, id, fallback, options)) changed = true
-    })
-    if (ok === false) return "error"
-    if (!changed) return "present"
-    skin.studioButtonPlaced = true
-    return reachableBefore ? "flagged" : "restored"
-  }
-
-  // Barcraft: the skin engine every bar surface reads, and the IPC that a
-  // keybinding reaches (`omarchy-shell barcraft reveal`).
-  SkinEngine {
-    id: skin
-    barGlassy: root.glassy
-    barTransparent: root.transparent
-    shellApi: root.shell
+  // Barcraft: engine, first-run Studio button placement, and `barcraft` IPC.
+  BarcraftHost {
+    id: barcraftHost
+    shell: root.shell
     barConfig: root.barConfig
     manifest: root.manifest
+    omarchyPath: root.omarchyPath
+    glassy: root.glassy
+    transparent: root.transparent
     vertical: root.vertical
-    ensureStudioButtonFn: function(force) { return root.ensureStudioButton(force) }
+    findPanelWidgetFn: function(id) { return root.findPanelWidget(id) }
   }
+  readonly property var skin: barcraftHost.engine
   // The engine by a name no SkinLook property shadows.
-  readonly property var barcraft: skin
-
-  // Bumped to peek an auto-hidden bar out on every screen for a moment.
-  property int barcraftRevealSerial: 0
-
-  ShellIpc {
-    target: "barcraft"
-
-    function ping(): string { return "ok" }
-    // The id the bar wears: a skin id, "standard", "theme" or "draft".
-    function current(): string { return skin.currentId() }
-    function doctor(): string { return skin.doctor() }
-    function reveal(): void { root.barcraftRevealSerial++ }
-    // Open the Studio on a tab: presets, colors, geometry, surface, behavior.
-    function studio(tab: string): void {
-      var item = root.findPanelWidget("thepixelgardener.barcraft")
-      if (item && typeof item.openTab === "function") item.openTab(tab)
-      else skin.notifyMissingStudioButton()
-    }
-    // Put the Barcraft Studio button back on the bar when removed earlier.
-    function restoreButton(): string {
-      var result = root.ensureStudioButton(true)
-      return result === "flagged" ? "present" : result
-    }
-    // Changes made here show their result in Omarchy's OSD.
-    function toggleAutoHide(): void { skin.toggleAutoHide(); skin.announce() }
-    function next(): string { var name = skin.cycleSkin(); skin.announce(); return name }
-    function setSkin(id: string): void { if (skin.selectSkin(id)) skin.announce() }
-    function followTheme(): void { skin.setFollowTheme(true); skin.announce() }
-    // Omarchy's own bar look on or off; skins stay for when it goes off.
-    function toggleStandard(): void { skin.setStandard(!skin.standard); skin.announce() }
-  }
-
-  // Whether a workspace holds any window, for auto-hide's "only with windows".
-  function workspaceHasWindows(toplevels, workspaceId) {
-    var list = toplevels || []
-    for (var i = 0; i < list.length; i++) {
-      var toplevel = list[i]
-      if (toplevel && toplevel.workspace && toplevel.workspace.id === workspaceId) return true
-    }
-    return false
-  }
+  readonly property var barcraft: barcraftHost.engine
 
   readonly property bool vertical: position === "left" || position === "right"
   // The main skin's size in logical pixels: Omarchy's own bar size tokens
@@ -878,8 +789,9 @@ Item {
   // the cutout is this panel's minimum sensible top-bar height. An
   // intentionally taller bar still wins.
   function thicknessFor(screen) {
-    var size = screen ? skin.zoneFor(screen.name).sizePx : root.barSize
-    return thicknessForSize(screen, size)
+    if (!screen) return root.barSize
+    var zone = skin.zoneFor(screen.name)
+    return thicknessForSize(screen, zone.sizePx) + zone.edgePx
   }
 
   function thicknessForSize(screen, size) {
@@ -1146,8 +1058,7 @@ Item {
 
   function moduleDropAtScene(scenePoint, sourceSlot) {
     var sourceWindow = root.slotWindow(sourceSlot) || root.barDragWindow
-    // A drop lands only over the bar strip. The window spans its whole
-    // screen, so its own bounds are not the bar's.
+    // A drop lands only over the bar strip.
     if (moduleRemoveDistance(windowScreenPoint(scenePoint, sourceWindow)) > 0) return null
 
     // The tray cannot go into its own drawer.
@@ -1450,8 +1361,6 @@ Item {
 
   // How far past the bar the drag point sits, in screen coordinates: past
   // the strip its screen's bar surface draws, thickness deep along its edge.
-  // The strip, not the window, is the boundary: the window spans the whole
-  // screen (BarPanel).
   function moduleRemoveDistance(screenPoint) {
     var screen = barDragScreen
     if (!screen) return 0
@@ -1896,78 +1805,32 @@ Item {
     readonly property int edgeGap: pskin.edgePx
     readonly property int sideGap: pskin.sidePx
     readonly property bool isIslandMode: pskin.mode === "islands"
-    property bool autoHideRevealed: false
+    readonly property bool effectivelyHidden: autoHide.effectivelyHidden
 
-    Timer {
-      id: autoHideDelay
-      interval: skin.prefs.autohideDelay
-      repeat: false
-      onTriggered: barWindow.autoHideRevealed = false
-    }
-
-    // A peek (workspace switch, `omarchy-shell barcraft reveal`) shows the bar
-    // for a moment, then lets it tuck away again unless the pointer is on it.
-    Timer {
-      id: peekTimer
-      repeat: false
-      onTriggered: if (!stripHover.hovered) barWindow.autoHideRevealed = false
-    }
-
-    function peek(ms) {
-      if (!pskin.autoHide) return
-      autoHideDelay.stop()
-      autoHideRevealed = true
-      peekTimer.interval = ms
-      peekTimer.restart()
-    }
-
-    Connections {
-      target: root
-      function onBarcraftRevealSerialChanged() { barWindow.peek(2200) }
-    }
-
-    readonly property var hyprMonitor: screen ? Hyprland.monitorFor(screen) : null
-    readonly property int activeWorkspaceId: hyprMonitor && hyprMonitor.activeWorkspace ? hyprMonitor.activeWorkspace.id : -1
-    onActiveWorkspaceIdChanged: if (skin.prefs.revealOnWorkspace) peek(1200)
-    readonly property bool workspaceHasWindows: activeWorkspaceId !== -1 && root.workspaceHasWindows(Hyprland.toplevels.values, activeWorkspaceId)
-    // "Only with windows": an empty workspace keeps the bar out.
-    readonly property bool hideAllowed: skin.prefs.autohideWhen !== "windows" || workspaceHasWindows
-
-    readonly property bool effectivelyHidden: root.barHidden || (pskin.autoHide && hideAllowed && !autoHideRevealed && !dragActive && !root.activePopout)
-
-    // An explicit zone instead of Auto: the reserved area stays the strip's
-    // thickness + floating edge gap, or 0 while auto-hide is on.
+    // An explicit zone instead of Auto: the reserved area stays the committed
+    // strip's thickness + floating edge gap, or 0 while auto-hide is on.
     exclusionMode: (root.barHidden || zone.autoHide) ? ExclusionMode.Ignore : ExclusionMode.Normal
-    exclusiveZone: root.thicknessForSize(screen, zone.sizePx) + zone.edgePx
+    exclusiveZone: root.thicknessFor(screen)
 
-    // While this window's widget or bar-move drag is live, the whole surface
-    // takes input (mask below), so the pointer never leaves the bar surface
-    // however far the drag goes. That is what keeps the gesture alive: while
-    // nothing on the workspace holds keyboard focus (an empty workspace),
-    // Hyprland picks a pointer target again on a surface commit, and a
-    // pointer that has strayed onto another surface is pulled off the bar
-    // mid-drag, ending the gesture with a synthesized release.
     // sameWindow, not identity: the drag records the QsWindow interface of
     // the slot's window, which is not this PanelWindow object itself.
     readonly property bool dragActive: (root.barDragSource !== null && root.sameWindow(root.barDragWindow, barWindow)) ||
       (root.barMoveActive && root.sameWindow(root.barMoveWindow, barWindow))
 
-    // Parked by the whole surface, which spans its screen, so none of it
-    // stays on screen: not the strip, however thick a notch floor makes it,
-    // nor the clear rest that a drag takes input on.
-    readonly property real parkDistance: root.vertical ? implicitWidth : implicitHeight
+    // Parked by its whole thickness, so none of it stays on screen however
+    // thick a notch floor, floating gap, or shadow makes it.
     margins {
-      top: root.barHidden && root.position === "top" ? -barWindow.parkDistance : 0
-      bottom: root.barHidden && root.position === "bottom" ? -barWindow.parkDistance : 0
-      left: root.barHidden && root.position === "left" ? -barWindow.parkDistance : 0
-      right: root.barHidden && root.position === "right" ? -barWindow.parkDistance : 0
+      top: root.barHidden && barWindow.surfaceEdge === "top" ? -barWindow.surfaceThickness : 0
+      bottom: root.barHidden && barWindow.surfaceEdge === "bottom" ? -barWindow.surfaceThickness : 0
+      left: root.barHidden && barWindow.surfaceEdge === "left" ? -barWindow.surfaceThickness : 0
+      right: root.barHidden && barWindow.surfaceEdge === "right" ? -barWindow.surfaceThickness : 0
     }
 
     anchors {
-      top: root.position === "top" || root.vertical
-      bottom: root.position === "bottom" || root.vertical
-      left: root.position === "left" || !root.vertical
-      right: root.position === "right" || !root.vertical
+      top: barWindow.surfaceEdge === "top" || barWindow.surfaceVertical
+      bottom: barWindow.surfaceEdge === "bottom" || barWindow.surfaceVertical
+      left: barWindow.surfaceEdge === "left" || !barWindow.surfaceVertical
+      right: barWindow.surfaceEdge === "right" || !barWindow.surfaceVertical
     }
 
     readonly property var panelMode: root.panelModeFor(screen)
@@ -1977,7 +1840,6 @@ Item {
     readonly property bool cutoutPending: BarModel.cutoutPending(root.displayCutouts, root.position, screen.name, screen.width, screen.height, screen.devicePixelRatio, panelMode)
     property bool cutoutWaitOver: false
     onCutoutPendingChanged: if (!cutoutPending) cutoutWaitOver = true
-    Component.onCompleted: if (!cutoutPending) cutoutWaitOver = true
 
     Timer {
       interval: 2000
@@ -1988,17 +1850,129 @@ Item {
     // Visual strip thickness on this screen: its skin's barSize (including any
     // live preview), raised by a display notch floor when needed.
     readonly property int thickness: root.thicknessForSize(screen, barSize)
+    // Extra room inside the layer surface for floating edge gap + drop shadow
+    // so the surface stays strip-sized (Omarchy r8442) instead of full-screen.
+    readonly property int shadowPad: (!pskin.standard && !root.transparent && pskin.shadow) ? Math.ceil(Style.space(26)) : 0
+    readonly property int visualThickness: thickness + edgeGap + shadowPad
+    // While Studio is open, its sliders and card previews resize the strip on
+    // every step, and each resize would blank it behind a settle. Hold the
+    // surface at its whole screen then (0.7's shape; input stays on the
+    // strip), so the bar stays in view while you edit. It settles back to
+    // the strip once when Studio closes.
+    readonly property int heldThickness: skin.studioOpen && screen
+      ? Math.max(visualThickness, root.vertical ? screen.width : screen.height)
+      : visualThickness
 
-    // The surface spans its screen at all times, transparent past the strip
-    // it paints; a drag toggles only its input region. Growing the surface
-    // for a drag instead flashes the strip's stale buffer stretched across
-    // the new size until the next frame lands, and the size can't come from
-    // anchoring all four edges either, which would void the exclusive zone
-    // (layer-shell reserves space from the one anchored edge) and drop tiled
-    // windows behind the bar. Glassy blur stays on the strip: Hyprland's
-    // ignore_alpha leaves the clear rest of the surface unblurred.
-    implicitWidth: root.vertical ? (screen ? screen.width : thickness) : 0
-    implicitHeight: root.vertical ? 0 : (screen ? screen.height : thickness)
+    // The surface is the strip (+ floating gap & shadow room) and nothing more:
+    // a drag that strays off it keeps the pointer via Hyprland's held-pointer
+    // patch. Resizing settles behind two clear frames so Hyprland never
+    // stretches the previous buffer into the new box.
+    property string surfaceEdge: root.position
+    property int surfaceThickness: heldThickness
+    readonly property bool surfaceVertical: surfaceEdge === "left" || surfaceEdge === "right"
+    implicitWidth: surfaceVertical ? surfaceThickness : 0
+    implicitHeight: surfaceVertical ? 0 : surfaceThickness
+
+    property bool presented: false
+    // clearing: waiting on a clear frame before resizing. revealing: waiting
+    // on a frame at the new size before showing the strip again.
+    property string settle: ""
+    property int settleFrames: 0
+    // A binding, so the strip is clear in the next frame whatever order the
+    // position and thickness handlers run in.
+    readonly property bool resizeDue: presented && (root.vertical !== surfaceVertical || heldThickness !== surfaceThickness)
+
+    function holdSurface() {
+      surfaceEdge = root.position
+      surfaceThickness = heldThickness
+    }
+
+    function finishSettle() {
+      settleWatchdog.stop()
+      holdSurface()
+      settle = ""
+    }
+
+    function requestFrame() {
+      var window = barStrip.Window.window
+      if (window) window.update()
+    }
+
+    // Runs once every binding on the position and thickness has caught up.
+    // Mid-settle, the resize takes whatever is current when it lands. Moving
+    // between opposite edges keeps the size, and with nothing on screen to
+    // stretch, a resize needs no settle either.
+    function follow() {
+      if (!presented || settle !== "") return
+      if (resizeDue && visible && !root.barHidden && !barWindow.effectivelyHidden && !underFullscreen && surfaceThickness > 0 && heldThickness > 0) {
+        settle = "clearing"
+        settleFrames = 0
+        settleWatchdog.restart()
+        requestFrame()
+      } else {
+        holdSurface()
+      }
+    }
+
+    Component.onCompleted: if (!cutoutPending) cutoutWaitOver = true
+    onHeldThicknessChanged: followLater.restart()
+    onEffectivelyHiddenChanged: if (effectivelyHidden && settle !== "") finishSettle()
+    Connections {
+      target: root
+      function onPositionChanged() { followLater.restart() }
+      function onBarHiddenChanged() { if (root.barHidden && barWindow.settle !== "") barWindow.finishSettle() }
+    }
+
+    Timer {
+      id: followLater
+      interval: 0
+      onTriggered: barWindow.follow()
+    }
+
+    // Frames stop for a surface Hyprland isn't showing, such as one on an
+    // output that went to sleep mid-settle.
+    Timer {
+      id: settleWatchdog
+      interval: 500
+      onTriggered: if (barWindow.settle !== "") barWindow.finishSettle()
+    }
+
+    Connections {
+      target: !barWindow.presented && barWindow.visible ? barStrip.Window.window : null
+      function onFrameSwapped() {
+        barWindow.holdSurface()
+        barWindow.presented = true
+      }
+    }
+
+    // Counts this window's own presented frames, asking for the next each
+    // time. Two after the strip turns clear, the clear one is up even with
+    // an opaque frame already in flight.
+    Connections {
+      target: barWindow.settle !== "" ? barStrip.Window.window : null
+      function onFrameSwapped() {
+        barWindow.settleFrames++
+        if (barWindow.settle === "clearing") {
+          if (barWindow.settleFrames >= 2) {
+            barWindow.holdSurface()
+            barWindow.settle = "revealing"
+            barWindow.settleFrames = 0
+          }
+        } else if (barWindow.resizeDue) {
+          barWindow.settle = "clearing"
+          barWindow.settleFrames = 0
+          settleWatchdog.restart()
+        } else {
+          var span = barWindow.surfaceVertical ? barWindow.width : barWindow.height
+          if (span === barWindow.surfaceThickness && barWindow.settleFrames >= 1) {
+            barWindow.finishSettle()
+            return
+          }
+        }
+        barWindow.requestFrame()
+      }
+    }
+
     color: "transparent"
     surfaceFormat.opaque: false
     WlrLayershell.namespace: "omarchy-bar"
@@ -2024,14 +1998,13 @@ Item {
       }
     }
 
-    // Idle, only the strip takes input, so the clear expanse passes clicks
-    // through to the windows and desktop below. Under a fullscreen window
-    // nothing does: Hyprland 0.56 passes the pointer through a faded top
-    // layer only while it holds the layer below fullscreen, and it lifts
-    // every layer on the monitor back above whenever a window on any other
-    // workspace leaves fullscreen, or the layer remaps. The invisible strip
-    // would then take the clicks meant for the top of the fullscreen window.
-    mask: dragActive ? null : (underFullscreen ? noInputRegion : (barWindow.effectivelyHidden && pskin.autoHide ? hoverEdgeRegion : stripInputRegion))
+    // Under a fullscreen window nothing takes input. Otherwise only the
+    // strip (or, tucked away, the edge sensor) does, so clicks pass through
+    // whatever clear room the surface holds past it (floating gap, side
+    // margins, shadow, a narrow width, Studio's hold) to the windows below.
+    mask: dragActive ? null
+      : (underFullscreen ? noInputRegion
+        : (barWindow.effectivelyHidden && pskin.autoHide ? hoverEdgeRegion : stripInputRegion))
 
     Region {
       id: stripInputRegion
@@ -2040,122 +2013,108 @@ Item {
 
     Region {
       id: hoverEdgeRegion
-      item: autoHideSensor
+      item: autoHide
     }
 
     Region {
       id: noInputRegion
     }
 
-    // Slim edge sensor + optional accent hairline while auto-hide tucks the bar away.
+    // Unanimated settle wrapper: drops to 0 on the exact frame a resize
+    // starts settling so Hyprland never stretches a fading buffer, while
+    // barStrip inside keeps its smooth auto-hide fade.
     Item {
-      id: autoHideSensor
-      visible: pskin.autoHide && !root.barHidden
-      x: root.position === "right" ? parent.width - Math.max(2, pskin.hoverEdgePx) : 0
-      y: root.position === "bottom" ? parent.height - Math.max(2, pskin.hoverEdgePx) : 0
-      width: root.vertical ? Math.max(2, pskin.hoverEdgePx) : parent.width
-      height: root.vertical ? parent.height : Math.max(2, pskin.hoverEdgePx)
-      z: 20
+      id: settleLayer
+      anchors.fill: parent
+      opacity: barWindow.settle === "" && !barWindow.resizeDue ? 1 : 0
 
-      Rectangle {
-        visible: pskin.accentHairline && barWindow.effectivelyHidden
-        anchors.horizontalCenter: root.vertical ? undefined : parent.horizontalCenter
-        anchors.verticalCenter: root.vertical ? parent.verticalCenter : undefined
-        anchors.top: root.position === "top" ? parent.top : undefined
-        anchors.bottom: root.position === "bottom" ? parent.bottom : undefined
-        anchors.left: root.position === "left" ? parent.left : undefined
-        anchors.right: root.position === "right" ? parent.right : undefined
-        width: root.vertical ? 2 : Math.min(parent.width * 0.24, Style.space(220))
-        height: root.vertical ? Math.min(parent.height * 0.24, Style.space(220)) : 2
-        radius: 1
-        color: pskin.resolvedAccent
-        opacity: 0.72
-      }
-
-      MouseArea {
-        anchors.fill: parent
-        hoverEnabled: true
-        acceptedButtons: Qt.NoButton
-        onEntered: {
-          autoHideDelay.stop()
-          barWindow.autoHideRevealed = true
-        }
-      }
-    }
-
-    // The bar itself, styled by this screen's skin.
-    Item {
-      id: barStrip
-
-      // How the Barcraft widget finds this bar's engine: by walking up its
-      // parents to here. Omarchy loads Bar.qml and the widget under different
-      // URLs, so a shared .pragma library gives each its own copy.
-      readonly property var barcraftEngine: root.barcraft
-
-      readonly property int activeEdgeOffset: barWindow.effectivelyHidden ? -(barWindow.thickness + barWindow.edgeGap + Style.space(8)) : barWindow.edgeGap
-      // Along the bar: the room between the side margins, narrowed to the
-      // skin's width and centered.
-      readonly property real alongRoom: Math.max(0, (root.vertical ? parent.height : parent.width) - barWindow.sideGap * 2)
-      readonly property real alongLength: Math.round(alongRoom * pskin.widthPercent / 100)
-      readonly property real alongStart: barWindow.sideGap + Math.round((alongRoom - alongLength) / 2)
-      x: root.vertical
-        ? (root.position === "right" ? parent.width - barWindow.thickness - activeEdgeOffset : activeEdgeOffset)
-        : alongStart
-      y: root.vertical
-        ? alongStart
-        : (root.position === "bottom" ? parent.height - barWindow.thickness - activeEdgeOffset : activeEdgeOffset)
-      width: root.vertical ? barWindow.thickness : alongLength
-      height: root.vertical ? alongLength : barWindow.thickness
-      opacity: barWindow.effectivelyHidden ? 0 : 1
-
-      Behavior on x { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
-      Behavior on y { NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
-      Behavior on opacity { NumberAnimation { duration: Style.duration(140); easing.type: Easing.OutCubic } }
-
-      HoverHandler {
-        id: stripHover
-        onHoveredChanged: {
-          if (!pskin.autoHide) return
-          if (hovered) {
-            autoHideDelay.stop()
-            peekTimer.stop()
-            barWindow.autoHideRevealed = true
-          } else {
-            autoHideDelay.restart()
-          }
-        }
-      }
-
-      // Omarchy standard: the stock bar's own strip, drawn the way it draws it.
-      Rectangle {
-        visible: pskin.standard
-        anchors.fill: parent
-        color: root.transparent ? "transparent" : pskin.surfaceColor
-      }
-
-      // Single surface for Edge and Floating (Wild Craft art draws its own).
-      SkinSurface {
-        visible: !pskin.standard && !barWindow.isIslandMode && !pskin.hasArt
-        anchors.fill: parent
+      BarAutoHide {
+        id: autoHide
+        host: barcraftHost
         look: pskin
-      }
-
-      // Wild Craft art layer (Barber Pole, Runeforge, Long Rocket)
-      BarArtLayer {
-        id: artLayer
-        anchors.fill: parent
-        art: pskin.art
-        themeTint: pskin.themeTint
-        customBackground: pskin.customBackgroundHex
-        customAccent: pskin.customAccentHex
-        contrast: pskin.contrast
+        screen: barWindow.screen
+        position: root.position
         vertical: root.vertical
-        cornerRadius: pskin.radiusPx
+        barHidden: root.barHidden
+        dragActive: barWindow.dragActive
+        activePopout: root.activePopout !== null
+        stripHovered: stripHover.hovered
+        z: 20
       }
 
-      Loader {
-        anchors.fill: parent
-        sourceComponent: root.vertical ? verticalBar : horizontalBar
+      // The bar itself, styled by this screen's skin.
+      Item {
+        id: barStrip
+
+        // How the Barcraft widget finds this bar's engine: by walking up its
+        // parents to here. Omarchy loads Bar.qml and the widget under different
+        // URLs, so a shared .pragma library gives each its own copy.
+        readonly property var barcraftEngine: root.barcraft
+
+        // Animate only the edge slide (auto-hide / edge-gap), not barStrip's x/y
+        // directly: when Studio expands or shrinks the layer surface on a bottom
+        // or right bar, parent.height/parent.width jumps and the strip must stay
+        // anchored at its screen edge without sliding across the desktop.
+        property real animatedEdgeOffset: barWindow.effectivelyHidden ? -(barWindow.thickness + barWindow.edgeGap + Style.space(8)) : barWindow.edgeGap
+        Behavior on animatedEdgeOffset {
+          enabled: barWindow.settle === "" && !barWindow.resizeDue
+          NumberAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic }
+        }
+        // Along the bar: the room between the side margins, narrowed to the
+        // skin's width and centered.
+        readonly property real alongRoom: Math.max(0, (root.vertical ? parent.height : parent.width) - barWindow.sideGap * 2)
+        readonly property real alongLength: Math.round(alongRoom * pskin.widthPercent / 100)
+        readonly property real alongStart: barWindow.sideGap + Math.round((alongRoom - alongLength) / 2)
+        x: root.vertical
+          ? (root.position === "right" ? parent.width - barWindow.thickness - animatedEdgeOffset : animatedEdgeOffset)
+          : alongStart
+        y: root.vertical
+          ? alongStart
+          : (root.position === "bottom" ? parent.height - barWindow.thickness - animatedEdgeOffset : animatedEdgeOffset)
+        width: root.vertical ? barWindow.thickness : alongLength
+        height: root.vertical ? alongLength : barWindow.thickness
+        opacity: barWindow.effectivelyHidden ? 0 : 1
+
+        Behavior on opacity { NumberAnimation { duration: Style.duration(140); easing.type: Easing.OutCubic } }
+
+        HoverHandler {
+          id: stripHover
+        }
+
+        // Omarchy standard: the stock bar's own strip, drawn the way it draws it.
+        Rectangle {
+          visible: pskin.standard
+          anchors.fill: parent
+          color: root.transparent ? "transparent" : pskin.surfaceColor
+        }
+
+        // Single surface for Edge and Floating (Wild Craft art draws its own).
+        SkinSurface {
+          visible: !pskin.standard && !barWindow.isIslandMode && !pskin.hasArt
+          anchors.fill: parent
+          look: pskin
+          position: root.position
+          vertical: root.vertical
+          transparent: root.transparent
+        }
+
+        // Wild Craft art layer (Matrix, Runeforge, Amiga)
+        BarArtLayer {
+          id: artLayer
+          anchors.fill: parent
+          art: pskin.art
+          themeTint: pskin.themeTint
+          customBackground: pskin.customBackgroundHex
+          customAccent: pskin.customAccentHex
+          contrast: pskin.contrast
+          vertical: root.vertical
+          cornerRadius: pskin.radiusPx
+        }
+
+        Loader {
+          anchors.fill: parent
+          sourceComponent: root.vertical ? verticalBar : horizontalBar
+        }
       }
     }
 
@@ -2252,6 +2211,9 @@ Item {
           readonly property real innerW: Math.max(leftModules.width, leftModules.implicitWidth)
           visible: hBarRoot.pills && innerW > 0
           look: pskin
+          position: root.position
+          vertical: root.vertical
+          transparent: root.transparent
           x: 0
           y: 0
           width: Math.round(innerW + hBarRoot.padX * 2)
@@ -2263,6 +2225,9 @@ Item {
         SkinSurface {
           visible: hBarRoot.pills && !barWindow.centerBesideRight && centerModules.contentWidth > 0
           look: pskin
+          position: root.position
+          vertical: root.vertical
+          transparent: root.transparent
           x: Math.round(centerModules.contentX - hBarRoot.padX)
           y: 0
           width: Math.round(centerModules.contentWidth + hBarRoot.padX * 2)
@@ -2274,6 +2239,9 @@ Item {
           readonly property real innerW: Math.max(rightModules.width, rightModules.implicitWidth)
           visible: hBarRoot.pills && innerW > 0
           look: pskin
+          position: root.position
+          vertical: root.vertical
+          transparent: root.transparent
           x: parent.width - width
           y: 0
           width: Math.round(innerW + hBarRoot.padX * 2)
@@ -2341,6 +2309,9 @@ Item {
           readonly property real innerH: Math.max(vLeftModules.height, vLeftModules.implicitHeight)
           visible: vBarRoot.pills && innerH > 0
           look: pskin
+          position: root.position
+          vertical: root.vertical
+          transparent: root.transparent
           x: 0
           y: 0
           width: parent.width
@@ -2351,6 +2322,9 @@ Item {
         SkinSurface {
           visible: vBarRoot.pills && vCenterModules.contentHeight > 0
           look: pskin
+          position: root.position
+          vertical: root.vertical
+          transparent: root.transparent
           x: 0
           y: Math.round(vCenterModules.contentY - vBarRoot.padY)
           width: parent.width
@@ -2362,6 +2336,9 @@ Item {
           readonly property real innerH: Math.max(vRightModules.height, vRightModules.implicitHeight)
           visible: vBarRoot.pills && innerH > 0
           look: pskin
+          position: root.position
+          vertical: root.vertical
+          transparent: root.transparent
           x: 0
           y: parent.height - height
           width: parent.width
@@ -2643,60 +2620,6 @@ Item {
         Behavior on opacity {
           NumberAnimation { duration: Style.duration(140); easing.type: Easing.OutCubic }
         }
-      }
-    }
-  }
-
-  // Barcraft: one skinned surface (the whole bar, or an island pill): a soft
-  // shadow, the fill (solid or gradient), border and bezel, all from `look`.
-  component SkinSurface: Item {
-    id: surface
-
-    property var look: null
-    readonly property bool clear: root.transparent || !look
-    readonly property real cornerRadius: look ? Math.min(look.radiusPx, Math.min(width, height) / 2) : 0
-    readonly property real shadowReach: look ? Style.space(2) + Style.space(3) * look.shadowStrength : 0
-
-    RectangularShadow {
-      anchors.fill: parent
-      visible: !surface.clear && surface.look.shadow && surface.width > 0 && surface.height > 0
-      radius: surface.cornerRadius
-      offset: Qt.vector2d(
-        root.position === "left" ? surface.shadowReach : (root.position === "right" ? -surface.shadowReach : 0),
-        root.position === "top" ? surface.shadowReach : (root.position === "bottom" ? -surface.shadowReach : 0))
-      blur: surface.look ? Style.space(8) + Style.space(10) * surface.look.shadowStrength : 0
-      spread: 0
-      color: Qt.rgba(0, 0, 0, surface.look ? 0.22 + 0.4 * surface.look.shadowStrength : 0)
-    }
-
-    BorderSurface {
-      id: surfaceFill
-      anchors.fill: parent
-      color: surface.clear ? "transparent" : surface.look.surfaceColor
-      borderSpec: surface.clear ? Border.none() : surface.look.surfaceBorderSpec
-      radius: surface.cornerRadius
-
-      Behavior on color { ColorAnimation { duration: Style.duration(180); easing.type: Easing.OutCubic } }
-
-      Rectangle {
-        readonly property real inset: surface.look && surface.look.borderRole !== "none" ? surface.look.borderWidth : 0
-        visible: !surface.clear && surface.look.gradientActive
-        anchors.fill: parent
-        anchors.margins: inset
-        radius: Math.max(0, surfaceFill.radius - inset)
-        gradient: Gradient {
-          orientation: root.vertical ? Gradient.Vertical : Gradient.Horizontal
-          GradientStop { position: 0.0; color: surface.look ? surface.look.surfaceColor : "transparent" }
-          GradientStop { position: 1.0; color: surface.look ? surface.look.gradientColor : "transparent" }
-        }
-      }
-
-      BarBezelOverlay {
-        anchors.fill: parent
-        bezelStyle: surface.clear ? "none" : surface.look.bezel
-        strength: surface.look ? surface.look.bezelStrength : 0.75
-        radius: parent.radius
-        accentColor: surface.look ? surface.look.resolvedAccent : "white"
       }
     }
   }
@@ -3177,7 +3100,10 @@ Item {
       var w = root.barWidgetRegistry.widgets
       if (customType) return null
       var registryName = root.canonicalWidgetId(moduleName)
-      return w[registryName] ? w[registryName].component : null
+      var comp = w[registryName] ? w[registryName].component : null
+      if (!comp && registryName === "thepixelgardener.barcraft")
+        return barcraftHost.studioWidgetComp
+      return comp
     }
     readonly property bool qmlCustom: customType === "qml"
     readonly property bool commandCustom: customType === "command"

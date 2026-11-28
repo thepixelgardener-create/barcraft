@@ -1,9 +1,8 @@
 import QtQuick
-import qs.Commons
 
 // Tactile 3D bezel / bevel overlay for bar surfaces and island pills.
-// Uses a static Canvas repainted only when geometry, radius, or bezel style
-// changes — zero per-frame overhead and exact rounded-corner tracking.
+// Lazily instantiates a static Canvas only while a bezel style is active,
+// zero per-frame overhead and zero Canvas allocation when bezel is "none".
 Item {
   id: root
 
@@ -12,44 +11,58 @@ Item {
   property real radius: 0
   property color accentColor: "#ffffff"
 
-  visible: bezelStyle !== "" && bezelStyle !== "none" && width > 2 && height > 2
+  readonly property bool bezelActive: bezelStyle !== "" && bezelStyle !== "none" && width > 2 && height > 2
+  readonly property bool canvasLoaded: bezelLoader.item !== null
+  visible: bezelActive
 
-  Canvas {
-    id: bezelCanvas
+  Loader {
+    id: bezelLoader
     anchors.fill: parent
-    renderStrategy: Canvas.Cooperative
+    // visible is the effective one: a Canvas loaded under a hidden parent
+    // would never paint once shown, so load only while actually on screen.
+    active: root.bezelActive && root.visible
+    sourceComponent: bezelComponent
+  }
 
-    onWidthChanged: requestPaint()
-    onHeightChanged: requestPaint()
-    onVisibleChanged: if (visible) requestPaint()
+  Component {
+    id: bezelComponent
 
-    Connections {
-      target: root
-      function onBezelStyleChanged() { bezelCanvas.requestPaint() }
-      function onStrengthChanged() { bezelCanvas.requestPaint() }
-      function onRadiusChanged() { bezelCanvas.requestPaint() }
-      function onAccentColorChanged() { bezelCanvas.requestPaint() }
-    }
+    Canvas {
+      id: bezelCanvas
+      anchors.fill: parent
+      renderStrategy: Canvas.Cooperative
 
-    function roundedRectPath(ctx, x, y, w, h, r) {
-      var cr = Math.max(0, Math.min(r, w / 2, h / 2))
-      ctx.beginPath()
-      ctx.moveTo(x + cr, y)
-      ctx.lineTo(x + w - cr, y)
-      if (cr > 0) ctx.arcTo(x + w, y, x + w, y + cr, cr)
-      ctx.lineTo(x + w, y + h - cr)
-      if (cr > 0) ctx.arcTo(x + w, y + h, x + w - cr, y + h, cr)
-      ctx.lineTo(x + cr, y + h)
-      if (cr > 0) ctx.arcTo(x, y + h, x, y + h - cr, cr)
-      ctx.lineTo(x, y + cr)
-      if (cr > 0) ctx.arcTo(x, y, x + cr, y, cr)
-      ctx.closePath()
-    }
+      Component.onCompleted: if (width > 2 && height > 2) requestPaint()
+      onWidthChanged: if (width > 2 && height > 2) requestPaint()
+      onHeightChanged: if (width > 2 && height > 2) requestPaint()
 
-    onPaint: {
-      var ctx = getContext("2d")
-      ctx.clearRect(0, 0, width, height)
-      if (!root.visible) return
+      Connections {
+        target: root
+        function onBezelStyleChanged() { bezelCanvas.requestPaint() }
+        function onStrengthChanged() { bezelCanvas.requestPaint() }
+        function onRadiusChanged() { bezelCanvas.requestPaint() }
+        function onAccentColorChanged() { bezelCanvas.requestPaint() }
+      }
+
+      function roundedRectPath(ctx, x, y, w, h, r) {
+        var cr = Math.max(0, Math.min(r, w / 2, h / 2))
+        ctx.beginPath()
+        ctx.moveTo(x + cr, y)
+        ctx.lineTo(x + w - cr, y)
+        if (cr > 0) ctx.arcTo(x + w, y, x + w, y + cr, cr)
+        ctx.lineTo(x + w, y + h - cr)
+        if (cr > 0) ctx.arcTo(x + w, y + h, x + w - cr, y + h, cr)
+        ctx.lineTo(x + cr, y + h)
+        if (cr > 0) ctx.arcTo(x, y + h, x, y + h - cr, cr)
+        ctx.lineTo(x, y + cr)
+        if (cr > 0) ctx.arcTo(x, y, x + cr, y, cr)
+        ctx.closePath()
+      }
+
+      onPaint: {
+        if (!root.bezelActive || width <= 2 || height <= 2) return
+        var ctx = getContext("2d")
+        ctx.clearRect(0, 0, width, height)
 
       var w = width
       var h = height
@@ -141,6 +154,7 @@ Item {
       }
 
       ctx.restore()
+      }
     }
   }
 }

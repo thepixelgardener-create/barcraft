@@ -25,6 +25,7 @@ Item {
   readonly property string userSkinsDir: configDir + "/bar/skins"
   readonly property string legacySkinsDir: configDir + "/bar-skins"
   readonly property string userShellTomlPath: configDir + "/shell.toml"
+  readonly property string userShellJsonPath: configDir + "/shell.json"
   readonly property string menuExtensionPath: configDir + "/extensions/omarchy-menu.jsonc"
   readonly property string updateHookPath: configDir + "/hooks/post-update.d/barcraft-sync"
   readonly property string pluginDir: {
@@ -36,6 +37,7 @@ Item {
   readonly property string pluginLicense: manifest && manifest.license ? String(manifest.license) : "MIT"
   readonly property string repositoryUrl: "https://github.com/thepixelgardener-create/barcraft"
   readonly property string issuesUrl: "https://github.com/thepixelgardener-create/barcraft/issues"
+  readonly property string shareSkinsUrl: "https://github.com/thepixelgardener-create/barcraft/issues/4"
   readonly property string remoteManifestUrl: "https://raw.githubusercontent.com/thepixelgardener-create/barcraft/main/manifest.json"
 
   // Explicit user-triggered Barcraft update check state:
@@ -61,6 +63,12 @@ Item {
   // per-monitor choices and drafts stay put for when it goes off again.
   property bool standard: false
   property bool studioButtonPlaced: false
+  // Open Studio panels editing this engine. While any is open the bar holds
+  // its surface still, so live resizes don't blank the strip (Bar.qml).
+  property int studioHolds: 0
+  readonly property bool studioOpen: studioHolds > 0
+  function holdStudio() { studioHolds++ }
+  function releaseStudio() { studioHolds = Math.max(0, studioHolds - 1) }
   readonly property var builtinSkins: SkinParser.builtinSkins()
   readonly property var classicSkins: builtinSkins.filter(function(s) { return s.category !== "wild" })
   readonly property var wildSkins: builtinSkins.filter(function(s) { return s.category === "wild" })
@@ -649,7 +657,8 @@ Item {
       persistState()
       return
     }
-    standard = false
+    // Reset discards the Main draft and nothing else: Omarchy standard stays
+    // as it is (resetToPreset is the one that also switches it off).
     hasCustomDraft = false
     _setDraftBaseHash("", "")
     var found = findSkinById(activeSkinId)
@@ -659,6 +668,7 @@ Item {
   }
 
   function resetToPreset() {
+    standard = false
     resetTarget("")
   }
 
@@ -807,12 +817,20 @@ Item {
     var sameFile = oldPath === renamed.path
     var removeOld = (!sameFile && SkinParser.isSafeSkinPath(oldPath, [engine.userSkinsDir, engine.legacySkinsDir])) ? oldPath : ""
     var oldHash = SkinParser.sanitizeMd5(store.hashForPath(oldPath))
+    if (!oldHash) {
+      store.rescan()
+      engine.notice("status.renameChangedExternally", skin.name, true)
+      return ""
+    }
 
     // Write and byte-verify the replacement file on disk and confirm oldPath
-    // removal before updating Studio state.
+    // still matches its scanned hash before updating Studio state.
     store.writeFile(renamed.path, SkinParser.serializeToml(renamed), function(ok, code) {
       if (!ok) {
-        if (code === 4) {
+        if (code === 3) {
+          store.rescan()
+          engine.notice("status.renameChangedExternally", skin.name, true)
+        } else if (code === 4) {
           store.rescan()
           engine.notice("status.renamePartial", cleanName, true)
         } else {
@@ -848,7 +866,7 @@ Item {
       engine.skinRenamed(id, slug)
       engine.notice("status.renamed", cleanName, false)
       if (removeOld) store.removeLegacySibling(removeOld)
-    }, { noClobber: !sameFile, removeAfter: removeOld })
+    }, { noClobber: !sameFile, expect: sameFile ? oldHash : "", removeAfter: removeOld, expectOld: removeOld ? oldHash : "" })
     return slug
   }
 
@@ -906,10 +924,15 @@ Item {
 
   // The TOML goes to wl-copy over stdin, never as an argument.
   function copyToml(screenName) {
+    if (standardFor(screenName)) {
+      engine.notice("status.copyStandard", "", true)
+      return false
+    }
     store.runJob(["wl-copy"], exportToml(screenName), function(code) {
       if (code === 0) engine.notice("status.copied", "", false)
       else engine.notice("status.copyFailed", "", true)
     })
+    return true
   }
 
   function copyActiveToml() {
@@ -1062,16 +1085,18 @@ Item {
     persistDebounce.stop()
     if (!stateLoaded) {
       persistDebounce.restart()
-      return
+      return false
     }
-    if (!isPrimary || !shellApi || typeof shellApi.mutateShellConfig !== "function") return
+    if (!isPrimary || !shellApi || typeof shellApi.mutateShellConfig !== "function") return false
     var json = stateJson()
-    if (json === _lastConfigJson) return
-    _lastConfigJson = json
-    shellApi.mutateShellConfig(function(config) {
+    if (json === _lastConfigJson) return true
+    var ok = shellApi.mutateShellConfig(function(config) {
       if (!config.bar || typeof config.bar !== "object") config.bar = {}
       config.bar.barcraft = JSON.parse(json)
     })
+    if (ok === false) return false
+    _lastConfigJson = json
+    return true
   }
 
   // 0.6 could save a skin as draft.toml or standard.toml. Those ids are
@@ -1151,9 +1176,52 @@ Item {
     applyState(st)
   }
 
+  property bool _pendingLegacyArchive: false
+  property int _legacyArchiveTries: 0
+  // What moves once shell.json holds the state: barcraft.toml to .migrated
+  // after a migration, or .migrated to .migrated.restored after recovering
+  // from it, so the recovery runs once and a later reset of bar.barcraft
+  // (omarchy bar defaults) doesn't bring 0.2's settings back each time.
+  property var _legacyArchiveMove: []
+
+  function _startLegacyArchive(from, to) {
+    _legacyArchiveMove = [from, to]
+    _pendingLegacyArchive = true
+    _legacyArchiveTries = 0
+    _verifyAndArchiveLegacy()
+  }
+
+  function _verifyAndArchiveLegacy() {
+    if (!_pendingLegacyArchive || !isPrimary) return
+    if (!store || typeof store.readTextFile !== "function") {
+      _pendingLegacyArchive = false
+      return
+    }
+    store.readTextFile(userShellJsonPath, function(status, text) {
+      if (!engine._pendingLegacyArchive) return
+      if (status === "ok" && SkinParser.shellJsonHasBarcraftState(text)) {
+        engine._pendingLegacyArchive = false
+        engine.migrated = true
+        var move = engine._legacyArchiveMove && engine._legacyArchiveMove.length === 2
+          ? engine._legacyArchiveMove : [engine.legacyStatePath, engine.legacyStatePath + ".migrated"]
+        // Numbered backup instead of -n: a target left from an earlier move
+        // must not make this one a silent no-op (the source would then be
+        // migrated or recovered again on every reset).
+        engine.runCommand(["mv", "--backup=numbered", "--", move[0], move[1]])
+        return
+      }
+      if (engine._legacyArchiveTries < 6) {
+        engine._legacyArchiveTries++
+        legacyArchiveTimer.restart()
+        return
+      }
+      engine._pendingLegacyArchive = false
+    })
+  }
+
   function loadState() {
     if (stateLoaded) return
-    if (configBlock) {
+    if (SkinParser.hasPersistedState(configBlock)) {
       applyConfigBlock()
       if (isPrimary && !studioButtonPlaced && typeof ensureStudioButtonFn === "function") {
         if (_studioButtonChanged(ensureStudioButtonFn(false))) {
@@ -1161,31 +1229,47 @@ Item {
           _lastConfigJson = stateJson()
         }
       }
+      stateLoaded = true
     } else {
-      if (isPrimary && legacyStateView.path && !legacyStateView.settled && _legacyWaits++ < 25) {
+      if (isPrimary && legacyStateView.path && (!legacyStateView.settled || !legacyMigratedView.settled) && _legacyWaits++ < 25) {
         loadTimer.restart()
         return
       }
-      var hasLegacy = isPrimary && legacyStateView.loaded && !!(legacyStateView.text() || "").trim()
+      var alreadyPlaced = !!(configBlock && configBlock.studioButtonPlaced === true)
+      var activeLegacyText = isPrimary && legacyStateView.loaded ? String(legacyStateView.text() || "") : ""
+      var migratedFallbackText = isPrimary && legacyMigratedView.loaded ? String(legacyMigratedView.text() || "") : ""
+      var hasActiveLegacy = !!activeLegacyText.trim()
+      var hasFallbackLegacy = !hasActiveLegacy && !!migratedFallbackText.trim()
+      var hasLegacy = hasActiveLegacy || hasFallbackLegacy
       if (hasLegacy) {
-        applyLegacyText(legacyStateView.text())
+        applyLegacyText(hasActiveLegacy ? activeLegacyText : migratedFallbackText)
       }
-      if (isPrimary && typeof ensureStudioButtonFn === "function") {
+      if (alreadyPlaced) studioButtonPlaced = true
+      if (isPrimary && !studioButtonPlaced && typeof ensureStudioButtonFn === "function") {
         if (_studioButtonChanged(ensureStudioButtonFn(false))) {
           studioButtonPlaced = true
           if (!hasLegacy) _lastConfigJson = stateJson()
         }
       }
+      stateLoaded = true
       if (hasLegacy) {
-        persistState()
-        migrated = true
-        runCommand(["mv", "-n", "--", legacyStatePath, legacyStatePath + ".migrated"])
+        var persisted = persistState()
+        if (persisted) {
+          if (hasActiveLegacy) _startLegacyArchive(legacyStatePath, legacyStatePath + ".migrated")
+          else _startLegacyArchive(legacyStatePath + ".migrated", legacyStatePath + ".migrated.restored")
+        }
       }
     }
-    stateLoaded = true
     _migrateRenamedIds()
     _rescanIfPinnedMissing()
     settleTimer.restart()
+  }
+
+  Timer {
+    id: legacyArchiveTimer
+    interval: 250
+    repeat: false
+    onTriggered: engine._verifyAndArchiveLegacy()
   }
 
   FileView {
@@ -1193,6 +1277,17 @@ Item {
     property bool loaded: false
     property bool settled: false
     path: engine.isPrimary ? engine.legacyStatePath : ""
+    printErrors: false
+    watchChanges: false
+    onLoaded: { loaded = true; settled = true }
+    onLoadFailed: settled = true
+  }
+
+  FileView {
+    id: legacyMigratedView
+    property bool loaded: false
+    property bool settled: false
+    path: engine.isPrimary ? (engine.legacyStatePath + ".migrated") : ""
     printErrors: false
     watchChanges: false
     onLoaded: { loaded = true; settled = true }
@@ -1520,7 +1615,7 @@ Item {
 
   Process {
     id: fieldPasteProc
-    command: ["sh", "-c", "timeout 2 wl-paste --no-newline --type text 2>/dev/null | head -c 256"]
+    command: ["sh", "-c", "timeout -k 1 2 wl-paste --no-newline --type text 2>/dev/null | head -c 256"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
@@ -1534,10 +1629,11 @@ Item {
     }
   }
 
-  // Clipboard text, bounded in time and cut off just past the 32 KiB a skin may be.
+  // Clipboard text, bounded in time (with SIGKILL fallback) and cut off just
+  // past the 32 KiB a skin may be.
   Process {
     id: pasteProc
-    command: ["sh", "-c", "timeout 2 wl-paste --no-newline --type text 2>/dev/null | head -c 32769"]
+    command: ["sh", "-c", "timeout -k 1 2 wl-paste --no-newline --type text 2>/dev/null | head -c 32769"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: engine.importText(text, engine._pasteTarget)
@@ -1605,6 +1701,10 @@ Item {
     runCommand(["xdg-open", issuesUrl])
   }
 
+  function openShareSkins() {
+    runCommand(["xdg-open", shareSkinsUrl])
+  }
+
   Timer {
     id: updateCheckWatchdog
     interval: 8000
@@ -1620,9 +1720,9 @@ Item {
 
   Process {
     id: updateCheckProc
-    command: ["sh", "-c",
-      "curl -fsSL --proto =https --proto-redir =https --tlsv1.2 --max-time 6 --max-filesize 16384 \"$1\" 2>/dev/null | head -c 16385",
-      "sh", engine.remoteManifestUrl]
+    command: ["bash", "-c",
+      "set -o pipefail; curl -fsSL --proto =https --proto-redir =https --tlsv1.2 --connect-timeout 4 --max-redirs 3 --max-time 6 --max-filesize 16384 \"$1\" 2>/dev/null | head -c 16385",
+      "bash", engine.remoteManifestUrl]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {

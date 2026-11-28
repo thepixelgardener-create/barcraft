@@ -125,9 +125,8 @@ Item {
     width: thumb.width - thumb.sideGap * 2
     height: thumb.barH
 
-    // Wild Craft art draws itself.
+    // Wild Craft art draws itself (lazy: 0 Canvases allocated for non-art skins).
     BarArtLayer {
-      visible: tl.hasArt
       anchors.fill: parent
       art: tl.hasArt ? tl.art : "none"
       themeTint: tl.themeTint

@@ -164,7 +164,7 @@ Item {
   //   0 written (and removeAfter unlinked if requested)
   //   1 failed (or rolled back when removeAfter could not be removed)
   //   2 target exists (noClobber)
-  //   3 target changed since it was read (expect mismatch)
+  //   3 target or removeAfter changed since it was read (expect / expectOld mismatch)
   //   4 target written, removeAfter could not be removed and rollback failed
   function writeFile(filePath, content, done, options) {
     var opts = options || {}
@@ -172,7 +172,8 @@ Item {
     var want = Qt.md5(text)
     runJob(["sh", "-c", SkinParser.WRITE_FILE_SCRIPT, "sh", String(filePath || ""), want,
             opts.noClobber ? "1" : "0", opts.chmodExec ? "1" : "0",
-            String(opts.removeAfter || ""), String(opts.expect || "")],
+            String(opts.removeAfter || ""), String(opts.expect || ""),
+            String(opts.expectOld || "")],
       text,
       function(code) {
         if (code === 0) {
@@ -233,34 +234,37 @@ Item {
       property int exitCode: -1
 
       function start() {
-        proc.running = true
-        watchdog.start()
+        readProc.running = true
+        readWatchdog.start()
       }
 
       function maybeFinish() {
         if (finished || !streamDone || !procExited) return
         finished = true
-        watchdog.stop()
-        var st = exitCode === 0 ? "ok" : (exitCode === 3 ? "missing" : "error")
+        readWatchdog.stop()
+        // READ_FILE_SCRIPT already rejects files exceeding MAX_READ_FILE_BYTES
+        // in bytes before writing stdout; keep a QML-side guard as well.
+        var overflow = exitCode === 0 && captured.length > SkinParser.MAX_READ_FILE_BYTES
+        var st = (exitCode === 0 && !overflow) ? "ok" : (exitCode === 3 ? "missing" : "error")
         if (callback) callback(st, st === "ok" ? captured : "")
         destroy()
       }
 
       Timer {
-        id: watchdog
+        id: readWatchdog
         interval: 8000
         repeat: false
         onTriggered: {
           if (reader.finished) return
           reader.finished = true
-          proc.running = false
+          readProc.running = false
           if (reader.callback) reader.callback("error", "")
           reader.destroy()
         }
       }
 
       Process {
-        id: proc
+        id: readProc
         command: reader.command
         stdout: StdioCollector {
           waitForEnd: true
@@ -330,7 +334,25 @@ Item {
     }
     _scanAgain = false
     _scanStartGen = _hashGen
+    _scanTimedOut = false
     scanProc.running = true
+    scanWatchdog.restart()
+  }
+
+  // A scan stuck on a stalled read (a dead mount, a FIFO swapped in after the
+  // checks) is stopped, and the skins already listed stay as they are.
+  property bool _scanTimedOut: false
+  Timer {
+    id: scanWatchdog
+    // Generous: a slow login with a full library is not a stuck read.
+    interval: 60000
+    repeat: false
+    onTriggered: {
+      if (!scanProc.running) return
+      store._scanTimedOut = true
+      console.warn("Barcraft: scanning saved skins took too long; keeping the skins already listed")
+      scanProc.running = false
+    }
   }
 
   property real _skinWatchStartedAt: 0
@@ -386,7 +408,7 @@ Item {
       "command -v inotifywait >/dev/null 2>&1 || exit 127; " +
       "dirs=(); for d in \"$1\" \"$2\" \"$3\" \"$4\"; do [ -n \"$d\" ] && [ -d \"$d\" ] && dirs+=(\"$d\"); done; " +
       "[ \"${#dirs[@]}\" -gt 0 ] || exit 1; " +
-      "exec inotifywait -m -q -e close_write,create,delete,delete_self,move,move_self --format '%w|%e|%f' \"${dirs[@]}\"",
+      "exec inotifywait -m -q -e close_write,create,delete,delete_self,move,move_self --format '%w|%e|%f' -- \"${dirs[@]}\"",
       "barcraft-skins-watch", store.userSkinsDir, store.legacySkinsDir, store.configDir + "/bar", store.configDir]
     onRunningChanged: {
       if (!running) return
@@ -436,18 +458,28 @@ Item {
           // read may be older than what is on disk. Publishing it would pair
           // an old skin with the new file's hash and let a later Save
           // overwrite the newer file. Scan again instead.
+          if (store._scanTimedOut) return
           if (store._hashGen > store._scanStartGen) {
             Qt.callLater(store.rescan)
             return
           }
-          var parsed = JSON.parse(text || "[]")
+          // A finished scan always prints its summary object. Nothing at all
+          // means it failed (no jq, no temp file), not an empty library.
+          if (!String(text || "").trim()) {
+            console.warn("Barcraft: could not scan saved skins; keeping the skins already listed")
+            return
+          }
+          var parsed = JSON.parse(text)
           var rows = Array.isArray(parsed) ? parsed : (parsed && Array.isArray(parsed.rows) ? parsed.rows : [])
           var truncated = (!Array.isArray(parsed) && parsed && Number(parsed.truncated) > 0)
             ? Math.floor(Number(parsed.truncated)) : 0
           var hashes = {}
           for (var i = 0; i < rows.length; i++) {
             var r = rows[i]
-            if (r && r.path && typeof r.text === "string") hashes[r.path] = Qt.md5(r.text)
+            // The scan's hash is of the bytes on disk, which is what saves
+            // compare against; jq's text differs for non-UTF-8 files.
+            if (r && r.path && typeof r.text === "string")
+              hashes[r.path] = (typeof r.hash === "string" && /^[0-9a-f]{32}$/.test(r.hash)) ? r.hash : Qt.md5(r.text)
           }
           store.skinHashes = store._mergeScanHashes(hashes)
           store.truncatedSkinCount = truncated
@@ -460,6 +492,7 @@ Item {
       }
     }
     onExited: {
+      scanWatchdog.stop()
       if (store._scanAgain) {
         store._scanAgain = false
         Qt.callLater(store.rescan)

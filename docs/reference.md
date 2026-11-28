@@ -61,7 +61,7 @@ omarchy-shell barcraft doctor                          # health report
 
 ## What Barcraft writes
 
-- `~/.config/omarchy/shell.json` → `bar.barcraft`: active skin, standard switch, per-monitor skins, preferences, and unsaved draft. (Barcraft 0.2's `~/.config/omarchy/barcraft.toml` migrates once to `barcraft.toml.migrated`.)
+- `~/.config/omarchy/shell.json` → `bar.barcraft`: active skin, standard switch, per-monitor skins, preferences, and unsaved draft. (Barcraft 0.2's `~/.config/omarchy/barcraft.toml` migrates once to `barcraft.toml.migrated`. If that state never reached `shell.json`, Barcraft recovers it from `.migrated` once, then renames the file `barcraft.toml.migrated.restored`.)
 - `~/.config/omarchy/bar/skins/*.toml`: skins you save in the Studio.
 - `~/.config/omarchy/shell.toml`: only when a skin sets `icon-scale` != `1.00`; writes `[bar]` icon tokens marked `# barcraft` and removes them again at `1.00`.
 - **Opt-in only** (toggled off by default in Studio → Behavior → Omarchy): a fenced `// barcraft:begin` … `// barcraft:end` block in `~/.config/omarchy/extensions/omarchy-menu.jsonc`, and `~/.config/omarchy/hooks/post-update.d/barcraft-sync`. Turning the toggles off removes them.
@@ -95,7 +95,7 @@ scripts/sync-upstream.sh                               # 3-way merge Omarchy's b
 | [`SkinStore.qml`](../SkinStore.qml) | Verified atomic file I/O, saved-skin scanning, and `inotifywait` directory watching |
 | [`SkinEngine.qml`](../SkinEngine.qml) | State, per-monitor drafts & saving, live previews, blur sync, clipboard, doctor |
 | [`SkinLook.qml`](../SkinLook.qml) | Resolved colors & geometry (`"auto"` included) per bar surface and thumbnail |
-| [`Bar.qml`](../Bar.qml) | Omarchy's bar with skinned surfaces, auto-hide, widget pills/chips, IPC |
-| [`BarWidget.qml`](../BarWidget.qml), [`StudioContent.qml`](../StudioContent.qml) | Bar pill widget and keyboard-driven Studio panel |
+| [`Bar.qml`](../Bar.qml), [`BarcraftHost.qml`](../BarcraftHost.qml), [`BarAutoHide.qml`](../BarAutoHide.qml), [`SkinSurface.qml`](../SkinSurface.qml) | Omarchy's bar with strip-sized resize-settling surfaces, extracted engine/IPC host, auto-hide sensor, and skinned surfaces |
+| [`BarWidget.qml`](../BarWidget.qml), [`StudioContent.qml`](../StudioContent.qml), [`StudioSkinCard.qml`](../StudioSkinCard.qml) | Bar pill widget, keyboard-driven Studio panel, and skin card tile |
 | [`BarArtLayer.qml`](../BarArtLayer.qml), [`BarBezelOverlay.qml`](../BarBezelOverlay.qml), [`SkinThumbnail.qml`](../SkinThumbnail.qml) | Still art renderer, 3D bezels, and live Studio card previews |
 | [`kit/`](../kit/), [`KitTheme.qml`](../KitTheme.qml), [`LineField.qml`](../LineField.qml) | Vendored Omarchy UI kit, theme bridge, and clipboard-safe line input |

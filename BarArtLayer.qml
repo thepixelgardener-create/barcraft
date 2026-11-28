@@ -34,46 +34,59 @@ Item {
     return "rgba(" + Math.round(c.r * 255) + "," + Math.round(c.g * 255) + "," + Math.round(c.b * 255) + "," + Math.max(0, Math.min(1, a)).toFixed(3) + ")"
   }
 
+  // Instantiate only the single Canvas matching the active art style (0 Canvases
+  // when art is "none"), freeing the 2D backing store immediately when turned off.
+  Loader {
+    id: artLoader
+    anchors.fill: parent
+    active: root.visible && width >= 4 && height >= 4
+    sourceComponent: root.art === "matrix" ? matrixComponent
+      : (root.art === "runeforge" ? runeComponent
+      : (root.art === "amiga" ? amigaComponent : null))
+  }
+
   // =========================================================================
   // 1. MATRIX — Phosphor Construct Terminal: curved CRT vignette, aperture
   //    grille, multi-depth katakana/hex rain with glowing phosphor trails,
   //    PCB traces with nodes, signal telemetry pips, and bloom HUD brackets.
   // =========================================================================
-  Canvas {
-    id: matrixCanvas
-    visible: root.art === "matrix"
-    anchors.fill: parent
-    renderStrategy: Canvas.Cooperative
+  Component {
+    id: matrixComponent
 
-    readonly property color phos: root.useTintedPalette ? root.acc : "#00ff66"
-    readonly property color phosHot: root.useTintedPalette ? Qt.lighter(root.acc, 1.55) : "#d6ffe6"
-    readonly property color crtBg: root.useTintedPalette ? Qt.darker(root.bg, 2.3) : "#030a06"
-    readonly property color crtGlow: root.useTintedPalette ? Qt.darker(root.bg, 1.35) : "#092013"
+    Canvas {
+      id: matrixCanvas
+      anchors.fill: parent
+      renderStrategy: Canvas.Cooperative
 
-    onWidthChanged: requestPaint()
-    onHeightChanged: requestPaint()
-    onVisibleChanged: if (visible) requestPaint()
+      readonly property color phos: root.useTintedPalette ? root.acc : "#00ff66"
+      readonly property color phosHot: root.useTintedPalette ? Qt.lighter(root.acc, 1.55) : "#d6ffe6"
+      readonly property color crtBg: root.useTintedPalette ? Qt.darker(root.bg, 2.3) : "#030a06"
+      readonly property color crtGlow: root.useTintedPalette ? Qt.darker(root.bg, 1.35) : "#092013"
 
-    Connections {
-      target: root
-      function onThemeTintChanged() { matrixCanvas.requestPaint() }
-      function onCustomBackgroundChanged() { matrixCanvas.requestPaint() }
-      function onCustomAccentChanged() { matrixCanvas.requestPaint() }
-      function onContrastChanged() { matrixCanvas.requestPaint() }
-      function onCornerRadiusChanged() { matrixCanvas.requestPaint() }
-      function onVerticalChanged() { matrixCanvas.requestPaint() }
-    }
+      Component.onCompleted: if (width >= 4 && height >= 4) requestPaint()
+      onWidthChanged: if (width >= 4 && height >= 4) requestPaint()
+      onHeightChanged: if (width >= 4 && height >= 4) requestPaint()
 
-    Connections {
-      target: Commons.Color
-      function onBackgroundChanged() { if (matrixCanvas.visible) matrixCanvas.requestPaint() }
-      function onAccentChanged() { if (matrixCanvas.visible) matrixCanvas.requestPaint() }
-    }
+      Connections {
+        target: root
+        function onThemeTintChanged() { matrixCanvas.requestPaint() }
+        function onCustomBackgroundChanged() { matrixCanvas.requestPaint() }
+        function onCustomAccentChanged() { matrixCanvas.requestPaint() }
+        function onContrastChanged() { matrixCanvas.requestPaint() }
+        function onCornerRadiusChanged() { matrixCanvas.requestPaint() }
+        function onVerticalChanged() { matrixCanvas.requestPaint() }
+      }
 
-    onPaint: {
-      var ctx = getContext("2d")
-      ctx.clearRect(0, 0, width, height)
-      if (!visible || width < 4 || height < 4) return
+      Connections {
+        target: Commons.Color
+        function onBackgroundChanged() { matrixCanvas.requestPaint() }
+        function onAccentChanged() { matrixCanvas.requestPaint() }
+      }
+
+      onPaint: {
+        if (width < 4 || height < 4) return
+        var ctx = getContext("2d")
+        ctx.clearRect(0, 0, width, height)
 
       var w = width
       var h = height
@@ -252,6 +265,7 @@ Item {
       ctx.lineWidth = compact ? 1 : 1.5
       traceBrackets()
       ctx.stroke()
+      }
     }
   }
 
@@ -261,76 +275,78 @@ Item {
   //    brushed iron sheen, forged rivets, keystone crest, molten ember glow,
   //    and etched geometric Elder Futhark rune medallions at the end-caps.
   // =========================================================================
-  Canvas {
-    id: runeCanvas
-    visible: root.art === "runeforge"
-    anchors.fill: parent
-    renderStrategy: Canvas.Cooperative
+  Component {
+    id: runeComponent
 
-    readonly property color brassGleam: root.useTintedPalette ? Qt.lighter(root.acc, 1.48) : "#f0d999"
-    readonly property color brassBright: root.useTintedPalette ? Qt.lighter(root.acc, 1.18) : "#caa55c"
-    readonly property color brassMuted: root.useTintedPalette ? Qt.darker(root.acc, 1.3) : "#7a5e30"
-    readonly property color brassDark: root.useTintedPalette ? Qt.darker(root.acc, 2.5) : "#2f2311"
-    readonly property color slateTop: root.useTintedPalette ? Qt.lighter(root.bg, 1.16) : "#221f25"
-    readonly property color slateMid: root.useTintedPalette ? root.bg : "#141218"
-    readonly property color slateBot: root.useTintedPalette ? Qt.darker(root.bg, 1.45) : "#09080c"
-    readonly property color emberCore: root.useTintedPalette ? Qt.lighter(root.acc, 1.35) : "#ffbe55"
-    readonly property color emberGlow: root.useTintedPalette ? root.acc : "#d4641e"
+    Canvas {
+      id: runeCanvas
+      anchors.fill: parent
+      renderStrategy: Canvas.Cooperative
 
-    onWidthChanged: requestPaint()
-    onHeightChanged: requestPaint()
-    onVisibleChanged: if (visible) requestPaint()
+      readonly property color brassGleam: root.useTintedPalette ? Qt.lighter(root.acc, 1.48) : "#f0d999"
+      readonly property color brassBright: root.useTintedPalette ? Qt.lighter(root.acc, 1.18) : "#caa55c"
+      readonly property color brassMuted: root.useTintedPalette ? Qt.darker(root.acc, 1.3) : "#7a5e30"
+      readonly property color brassDark: root.useTintedPalette ? Qt.darker(root.acc, 2.5) : "#2f2311"
+      readonly property color slateTop: root.useTintedPalette ? Qt.lighter(root.bg, 1.16) : "#221f25"
+      readonly property color slateMid: root.useTintedPalette ? root.bg : "#141218"
+      readonly property color slateBot: root.useTintedPalette ? Qt.darker(root.bg, 1.45) : "#09080c"
+      readonly property color emberCore: root.useTintedPalette ? Qt.lighter(root.acc, 1.35) : "#ffbe55"
+      readonly property color emberGlow: root.useTintedPalette ? root.acc : "#d4641e"
 
-    Connections {
-      target: root
-      function onThemeTintChanged() { runeCanvas.requestPaint() }
-      function onCustomBackgroundChanged() { runeCanvas.requestPaint() }
-      function onCustomAccentChanged() { runeCanvas.requestPaint() }
-      function onContrastChanged() { runeCanvas.requestPaint() }
-      function onVerticalChanged() { runeCanvas.requestPaint() }
-    }
+      Component.onCompleted: if (width >= 6 && height >= 6) requestPaint()
+      onWidthChanged: if (width >= 6 && height >= 6) requestPaint()
+      onHeightChanged: if (width >= 6 && height >= 6) requestPaint()
 
-    Connections {
-      target: Commons.Color
-      function onBackgroundChanged() { if (runeCanvas.visible) runeCanvas.requestPaint() }
-      function onAccentChanged() { if (runeCanvas.visible) runeCanvas.requestPaint() }
-    }
+      Connections {
+        target: root
+        function onThemeTintChanged() { runeCanvas.requestPaint() }
+        function onCustomBackgroundChanged() { runeCanvas.requestPaint() }
+        function onCustomAccentChanged() { runeCanvas.requestPaint() }
+        function onContrastChanged() { runeCanvas.requestPaint() }
+        function onVerticalChanged() { runeCanvas.requestPaint() }
+      }
 
-    function chamferPath(ctx, x, y, w, h, cut) {
-      var c = Math.max(0, Math.min(cut, w / 4, h / 2.2))
-      ctx.beginPath()
-      ctx.moveTo(x + c, y)
-      ctx.lineTo(x + w - c, y)
-      ctx.lineTo(x + w, y + c)
-      ctx.lineTo(x + w, y + h - c)
-      ctx.lineTo(x + w - c, y + h)
-      ctx.lineTo(x + c, y + h)
-      ctx.lineTo(x, y + h - c)
-      ctx.lineTo(x, y + c)
-      ctx.closePath()
-    }
+      Connections {
+        target: Commons.Color
+        function onBackgroundChanged() { runeCanvas.requestPaint() }
+        function onAccentChanged() { runeCanvas.requestPaint() }
+      }
 
-    function drawRivet(ctx, cx, cy, punch) {
-      ctx.beginPath()
-      ctx.arc(cx, cy, 1.7, 0, Math.PI * 2)
-      ctx.fillStyle = "rgba(0,0,0,0.75)"
-      ctx.fill()
+      function chamferPath(ctx, x, y, w, h, cut) {
+        var c = Math.max(0, Math.min(cut, w / 4, h / 2.2))
+        ctx.beginPath()
+        ctx.moveTo(x + c, y)
+        ctx.lineTo(x + w - c, y)
+        ctx.lineTo(x + w, y + c)
+        ctx.lineTo(x + w, y + h - c)
+        ctx.lineTo(x + w - c, y + h)
+        ctx.lineTo(x + c, y + h)
+        ctx.lineTo(x, y + h - c)
+        ctx.lineTo(x, y + c)
+        ctx.closePath()
+      }
 
-      ctx.beginPath()
-      ctx.arc(cx, cy, 1.25, 0, Math.PI * 2)
-      ctx.fillStyle = root.rgba(runeCanvas.brassMuted, Math.min(0.95, 0.85 * punch))
-      ctx.fill()
+      function drawRivet(ctx, cx, cy, punch) {
+        ctx.beginPath()
+        ctx.arc(cx, cy, 1.7, 0, Math.PI * 2)
+        ctx.fillStyle = "rgba(0,0,0,0.75)"
+        ctx.fill()
 
-      ctx.beginPath()
-      ctx.arc(cx - 0.35, cy - 0.35, 0.55, 0, Math.PI * 2)
-      ctx.fillStyle = root.rgba(runeCanvas.brassGleam, Math.min(1.0, 0.95 * punch))
-      ctx.fill()
-    }
+        ctx.beginPath()
+        ctx.arc(cx, cy, 1.25, 0, Math.PI * 2)
+        ctx.fillStyle = root.rgba(runeCanvas.brassMuted, Math.min(0.95, 0.85 * punch))
+        ctx.fill()
 
-    onPaint: {
-      var ctx = getContext("2d")
-      ctx.clearRect(0, 0, width, height)
-      if (!visible || width < 6 || height < 6) return
+        ctx.beginPath()
+        ctx.arc(cx - 0.35, cy - 0.35, 0.55, 0, Math.PI * 2)
+        ctx.fillStyle = root.rgba(runeCanvas.brassGleam, Math.min(1.0, 0.95 * punch))
+        ctx.fill()
+      }
+
+      onPaint: {
+        if (width < 6 || height < 6) return
+        var ctx = getContext("2d")
+        ctx.clearRect(0, 0, width, height)
 
       var w = width
       var h = height
@@ -504,6 +520,7 @@ Item {
       ctx.moveTo(0.75, cut + 0.75); ctx.lineTo(cut + 0.75, 0.75)
       ctx.moveTo(w - cut - 0.75, 0.75); ctx.lineTo(w - 0.75, cut + 0.75)
       ctx.stroke()
+      }
     }
   }
 
@@ -513,43 +530,45 @@ Item {
   //    Intuition pixel bevels, Amiga Orange accent hairline, checkered Boing
   //    Ball gadget on the left, and Workbench depth gadget on the right.
   // =========================================================================
-  Canvas {
-    id: amigaCanvas
-    visible: root.art === "amiga"
-    anchors.fill: parent
-    renderStrategy: Canvas.Cooperative
+  Component {
+    id: amigaComponent
 
-    readonly property color wbBlueTop: root.useTintedPalette ? Qt.lighter(root.bg, 1.24) : "#1466bf"
-    readonly property color wbBlueMid: root.useTintedPalette ? root.bg : "#0055aa"
-    readonly property color wbBlueBot: root.useTintedPalette ? Qt.darker(root.bg, 1.45) : "#003773"
-    readonly property color wbWhite: "#ffffff"
-    readonly property color wbBlack: "#060910"
-    readonly property color wbOrange: root.useTintedPalette ? root.acc : "#ff8800"
-    readonly property color boingRed: root.useTintedPalette ? root.acc : "#e82222"
+    Canvas {
+      id: amigaCanvas
+      anchors.fill: parent
+      renderStrategy: Canvas.Cooperative
 
-    onWidthChanged: requestPaint()
-    onHeightChanged: requestPaint()
-    onVisibleChanged: if (visible) requestPaint()
+      readonly property color wbBlueTop: root.useTintedPalette ? Qt.lighter(root.bg, 1.24) : "#1466bf"
+      readonly property color wbBlueMid: root.useTintedPalette ? root.bg : "#0055aa"
+      readonly property color wbBlueBot: root.useTintedPalette ? Qt.darker(root.bg, 1.45) : "#003773"
+      readonly property color wbWhite: "#ffffff"
+      readonly property color wbBlack: "#060910"
+      readonly property color wbOrange: root.useTintedPalette ? root.acc : "#ff8800"
+      readonly property color boingRed: root.useTintedPalette ? root.acc : "#e82222"
 
-    Connections {
-      target: root
-      function onThemeTintChanged() { amigaCanvas.requestPaint() }
-      function onCustomBackgroundChanged() { amigaCanvas.requestPaint() }
-      function onCustomAccentChanged() { amigaCanvas.requestPaint() }
-      function onContrastChanged() { amigaCanvas.requestPaint() }
-      function onVerticalChanged() { amigaCanvas.requestPaint() }
-    }
+      Component.onCompleted: if (width >= 6 && height >= 6) requestPaint()
+      onWidthChanged: if (width >= 6 && height >= 6) requestPaint()
+      onHeightChanged: if (width >= 6 && height >= 6) requestPaint()
 
-    Connections {
-      target: Commons.Color
-      function onBackgroundChanged() { if (amigaCanvas.visible) amigaCanvas.requestPaint() }
-      function onAccentChanged() { if (amigaCanvas.visible) amigaCanvas.requestPaint() }
-    }
+      Connections {
+        target: root
+        function onThemeTintChanged() { amigaCanvas.requestPaint() }
+        function onCustomBackgroundChanged() { amigaCanvas.requestPaint() }
+        function onCustomAccentChanged() { amigaCanvas.requestPaint() }
+        function onContrastChanged() { amigaCanvas.requestPaint() }
+        function onVerticalChanged() { amigaCanvas.requestPaint() }
+      }
 
-    onPaint: {
-      var ctx = getContext("2d")
-      ctx.clearRect(0, 0, width, height)
-      if (!visible || width < 6 || height < 6) return
+      Connections {
+        target: Commons.Color
+        function onBackgroundChanged() { amigaCanvas.requestPaint() }
+        function onAccentChanged() { amigaCanvas.requestPaint() }
+      }
+
+      onPaint: {
+        if (width < 6 || height < 6) return
+        var ctx = getContext("2d")
+        ctx.clearRect(0, 0, width, height)
 
       var w = width
       var h = height
@@ -712,6 +731,7 @@ Item {
         ctx.strokeRect(w - 10.5, tcy - 3.5, 4, 3.5)
         ctx.fillStyle = "#ffffff"
         ctx.fillRect(w - 8, tcy - 1, 4, 3.5)
+      }
       }
     }
   }

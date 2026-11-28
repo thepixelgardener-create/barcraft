@@ -70,7 +70,7 @@ Column {
   property Item navCurrent: null
   property point lastPointer: Qt.point(-1, -1)
 
-  readonly property bool textEditing: nameField.activeFocus || renamingId !== ""
+  readonly property bool textEditing: (draftControls.visible && nameField.activeFocus) || renamingId !== ""
   readonly property color fg: Kit.Color.popups.text
   readonly property color dimFg: Kit.Color.textDim
   readonly property var screenNames: {
@@ -85,6 +85,7 @@ Column {
     if (screenTarget !== "" && screenNames.indexOf(screenTarget) === -1) {
       screenTarget = ""
       confirmOverwriteName = ""
+      confirmOverwriteTarget = ""
       pendingPreview = ""
       previewTimer.stop()
       if (engine) engine.clearPreview()
@@ -134,6 +135,13 @@ Column {
     statusTimer.restart()
   }
 
+  function formatNotice(tpl, arg) {
+    var text = String(tpl || "")
+    if (text.indexOf("%1") === -1) return text
+    var val = String(arg === undefined || arg === null ? "" : arg)
+    return text.replace("%1", function() { return val })
+  }
+
   Connections {
     target: root.engine
     function onNotice(key, arg, isError) {
@@ -145,7 +153,7 @@ Column {
         root.confirmOverwriteTarget = root.lastSaveTarget
         overwriteTimer.restart()
       }
-      root.showStatus(root.tr(key).arg(arg), isError)
+      root.showStatus(root.formatNotice(root.tr(key), arg), isError)
     }
     function onSkinRenamed(oldId, newId) {
       if (!newId) return
@@ -166,9 +174,11 @@ Column {
       return
     }
     keyboardMode = false
+    if (nameField.activeFocus) nameField.focus = false
     renamingId = ""
     confirmDeleteId = ""
     confirmOverwriteName = ""
+    confirmOverwriteTarget = ""
     pendingPreview = ""
     previewTimer.stop()
     if (engine) engine.clearPreview()
@@ -194,7 +204,27 @@ Column {
   }
 
   readonly property var tabs: ["presets", "colors", "geometry", "surface", "behavior"]
-  readonly property bool craftTab: activeTab !== "presets"
+  readonly property bool hasUnsavedDraft: !!root.engine && (root.engine.revision,
+    root.engine.hasDraftFor(root.screenTarget) || root.engine.canUndoPasteFor(root.screenTarget))
+  readonly property bool hasMainUnsavedDraft: !!root.engine && (root.engine.revision,
+    root.engine.hasDraftFor("") || root.engine.canUndoPasteFor(""))
+  readonly property bool hasOtherMainDraft: root.screenTarget !== "" && !root.hasUnsavedDraft && root.hasMainUnsavedDraft
+  readonly property bool canUndoPasteHere: !!root.engine && (root.engine.revision,
+    root.engine.canUndoPasteFor(root.screenTarget))
+  readonly property bool mainCanUndoPaste: !!root.engine && (root.engine.revision,
+    root.engine.canUndoPasteFor(""))
+  readonly property var themeSkinErrors: root.engine && root.engine.themeSkinInspection
+    && root.engine.themeSkinInspection.errors ? root.engine.themeSkinInspection.errors : []
+  readonly property int themeSkinErrorCount: root.engine && root.engine.themeSkinInspection
+    ? Math.max(themeSkinErrors.length, Number(root.engine.themeSkinInspection.errorCount) || 0) : 0
+
+  function selectScreenTarget(target) {
+    root.screenTarget = target
+    root.confirmOverwriteName = ""
+    root.confirmOverwriteTarget = ""
+    root.pendingPreview = ""
+    previewTimer.restart()
+  }
 
   function setTab(tab) {
     if (activeTab === tab || tabs.indexOf(tab) < 0) return
@@ -271,7 +301,10 @@ Column {
     id: overwriteTimer
     interval: 4000
     repeat: false
-    onTriggered: root.confirmOverwriteName = ""
+    onTriggered: {
+      root.confirmOverwriteName = ""
+      root.confirmOverwriteTarget = ""
+    }
   }
 
   function saveSkin() {
@@ -287,12 +320,17 @@ Column {
       confirmOverwriteName = wanted
       confirmOverwriteTarget = screenTarget
       overwriteTimer.restart()
-      showStatus(tr("status.confirmOverwrite").arg(res.conflictName), true)
+      showStatus(formatNotice(tr("status.confirmOverwrite"), res.conflictName), true)
       return
     }
     confirmOverwriteName = ""
+    confirmOverwriteTarget = ""
     overwriteTimer.stop()
     nameField.text = ""
+    if (nameField.activeFocus) {
+      nameField.focus = false
+      restoreKeys()
+    }
   }
 
   function restoreKeys() {
@@ -310,6 +348,16 @@ Column {
     if (restoreKey !== "" && item.navKey === restoreKey) {
       navCurrent = item
       restoreKey = ""
+    }
+  }
+
+  // Puts the cursor on an already registered item by its key.
+  function moveCursorTo(key) {
+    for (var i = 0; i < navItems.length; i++) {
+      if (navItems[i].navKey === key) {
+        navCurrent = navItems[i]
+        return
+      }
     }
   }
 
@@ -389,7 +437,7 @@ Column {
 
   function navActivate() {
     keyboardMode = true
-    if (navCurrent && navCurrent.visible) navCurrent.activate()
+    if (navCurrent && navCurrent.visible && navCurrent.navEnabled) navCurrent.activate()
     else navMove(0, 1)
   }
 
@@ -438,6 +486,38 @@ Column {
         width: Math.round(Style.font.display * 1.3)
         height: Math.round(width * 0.6)
         ink: root.fg
+      }
+    }
+    trailingControl: Component {
+      Row {
+        spacing: Style.spacing.xs
+        visible: !!root.engine
+
+        ActionButton {
+          navKey: "copyHero"
+          inHeader: true
+          navGrid: true
+          // The committed switch, not standardFor(): that one turns false
+          // during a hover preview and would make Copy blink on and off.
+          readonly property bool isStandard: !!root.engine && root.engine.standard
+          disabled: isStandard
+          text: root.tr("action.copy", "Copy")
+          iconText: "󰆏"
+          tooltipText: isStandard
+            ? root.tr("tooltip.copyStandard", "Switch off Omarchy standard to copy a skin")
+            : root.tr("tooltip.copyToml", "Copy the active skin as [bar-skin] TOML")
+          onTriggered: if (root.engine) root.engine.copyToml(root.screenTarget)
+        }
+
+        ActionButton {
+          navKey: "pasteHero"
+          inHeader: true
+          navGrid: true
+          text: root.tr("action.pasteShort", "Paste")
+          iconText: "󰆒"
+          tooltipText: root.tr("tooltip.pasteSkin", "Paste a [bar-skin] TOML snippet from the clipboard")
+          onTriggered: if (root.engine) root.engine.importFromClipboard(root.screenTarget)
+        }
       }
     }
   }
@@ -490,10 +570,7 @@ Column {
         return out
       }
       onPicked: function(v) {
-        root.screenTarget = v === "*main*" ? "" : v
-        root.confirmOverwriteName = ""
-        root.pendingPreview = ""
-        previewTimer.restart()
+        root.selectScreenTarget(v === "*main*" ? "" : v)
       }
     }
 
@@ -547,7 +624,8 @@ Column {
         columnSpacing: Style.spacing.sm
         rowSpacing: Style.spacing.sm
 
-        SkinCard {
+        StudioSkinCard {
+          studio: root
           visible: root.screenTarget === ""
           width: root.cardWidth
           cardId: "standard"
@@ -556,7 +634,8 @@ Column {
           subtitle: root.tr("label.standardHint", "")
         }
 
-        SkinCard {
+        StudioSkinCard {
+          studio: root
           visible: !!root.engine && root.engine.themeSkin !== null
           width: root.cardWidth
           cardId: "theme"
@@ -568,8 +647,9 @@ Column {
         Repeater {
           model: root.engine ? root.engine.builtinSkins : []
 
-          SkinCard {
+          StudioSkinCard {
             required property var modelData
+            studio: root
             width: root.cardWidth
             cardId: modelData.id
             skinData: modelData
@@ -579,31 +659,51 @@ Column {
         }
       }
 
-      // Saved skins (~/.config/omarchy/bar/skins/*.toml)
-      RowLayout {
+      // One-line diagnostic hint when the active theme ships a [bar-skin] with
+      // errors — visible even if the error prevented the theme skin from loading.
+      Item {
+        id: themeErrorHint
+        visible: root.screenTarget === "" && root.themeSkinErrors.length > 0
         width: parent.width
-        spacing: Style.spacing.sm
+        implicitHeight: themeErrorText.implicitHeight
+        height: implicitHeight
 
-        O.PanelSectionHeader {
-          Layout.fillWidth: true
-          foreground: root.fg
-          text: root.tr("section.user", "Your skins")
+        HoverHandler { id: themeErrorHover }
+
+        Text {
+          id: themeErrorText
+          width: parent.width
+          textFormat: Text.PlainText
+          text: {
+            var errs = root.themeSkinErrors
+            if (errs.length === 0) return ""
+            var first = errs[0].message || ""
+            var total = Math.max(errs.length, root.themeSkinErrorCount)
+            // %2 first: the message itself may contain "%2".
+            return total > 1
+              ? root.formatNotice(root.tr("hint.themeSkinErrorMore", "Theme [bar-skin]: %1 (+%2 more)")
+                  .replace("%2", function() { return String(total - 1) }), first)
+              : root.formatNotice(root.tr("hint.themeSkinError", "Theme [bar-skin]: %1"), first)
+          }
+          color: Kit.Color.urgent
+          font.family: Style.font.family
+          font.pixelSize: Style.font.caption
+          elide: Text.ElideRight
         }
 
-        ActionButton {
-          navKey: "undoPasteSkins"
-          visible: !!root.engine && (root.engine.revision, root.engine.canUndoPasteFor(root.screenTarget))
-          text: root.tr("action.undoPaste", "Undo paste")
-          iconText: "󰕌"
-          onTriggered: if (root.engine) root.engine.undoPaste(root.screenTarget)
+        O.PanelToolTip {
+          visible: themeErrorHover.hovered && root.themeSkinErrors.length > 0
+          delay: 300
+          text: root.themeSkinErrors.map(function(e) { return e.message }).join("\n")
         }
+      }
 
-        ActionButton {
-          navKey: "pasteSkins"
-          text: root.tr("action.paste", "Paste skin")
-          iconText: "󰆒"
-          onTriggered: if (root.engine) root.engine.importFromClipboard(root.screenTarget)
-        }
+      // Saved skins (~/.config/omarchy/bar/skins/*.toml)
+      O.PanelSectionHeader {
+        visible: !!root.engine && root.engine.userSkins.length > 0
+        width: parent.width
+        foreground: root.fg
+        text: root.tr("section.user", "Your skins")
       }
 
       Grid {
@@ -616,8 +716,9 @@ Column {
         Repeater {
           model: root.engine ? root.engine.userSkins : []
 
-          SkinCard {
+          StudioSkinCard {
             required property var modelData
+            studio: root
             width: root.cardWidth
             cardId: modelData.id
             skinData: modelData
@@ -1084,7 +1185,7 @@ Column {
             Layout.fillWidth: true
             textFormat: Text.PlainText
             text: root.tr("about.meta", "Barcraft %1 · %2 · %3")
-              .arg(root.engine && root.engine.pluginVersion ? root.engine.pluginVersion : "0.7.1")
+              .arg(root.engine && root.engine.pluginVersion ? root.engine.pluginVersion : "")
               .arg(root.engine ? root.engine.pluginLicense : "MIT")
               .arg(root.engine ? root.engine.pluginAuthor : "frueh")
             color: root.dimFg
@@ -1101,8 +1202,8 @@ Column {
               var st = root.engine.updateState
               if (st === "checking") return root.tr("about.checking", "Checking…")
               if (st === "uptodate") return root.tr("about.upToDate", "Up to date")
-              if (st === "available") return root.tr("about.updateAvailable", "v%1 available").arg(root.engine.remoteVersion)
-              if (st === "ahead") return root.tr("about.ahead", "Ahead of main (%1)").arg(root.engine.remoteVersion)
+              if (st === "available") return root.formatNotice(root.tr("about.updateAvailable", "v%1 available"), root.engine.remoteVersion)
+              if (st === "ahead") return root.formatNotice(root.tr("about.ahead", "Ahead of main (%1)"), root.engine.remoteVersion)
               if (st === "error") return root.tr("about.checkFailed", "Check failed")
               return ""
             }
@@ -1121,22 +1222,29 @@ Column {
           spacing: Style.spacing.sm
 
           ActionButton {
-            navKey: "checkUpdates"
+            navKey: "updateAction"
             navGrid: true
-            text: root.engine && root.engine.updateState === "checking"
-              ? root.tr("about.checking", "Checking…")
-              : root.tr("action.checkUpdates", "Check updates")
-            iconText: "󰚰"
-            onTriggered: if (root.engine) root.engine.checkForUpdates()
+            readonly property bool updateReady: !!root.engine && root.engine.updateState === "available"
+            text: updateReady
+              ? root.tr("action.updateNow", "Update")
+              : (root.engine && root.engine.updateState === "checking"
+                ? root.tr("about.checking", "Checking…")
+                : root.tr("action.checkUpdates", "Check updates"))
+            iconText: updateReady ? "󰇚" : "󰚰"
+            selected: updateReady
+            onTriggered: {
+              if (!root.engine) return
+              if (updateReady) root.engine.requestPluginUpdate()
+              else root.engine.checkForUpdates()
+            }
           }
 
           ActionButton {
-            navKey: "updatePlugin"
+            navKey: "shareSkins"
             navGrid: true
-            text: root.tr("action.updateNow", "Update")
-            iconText: "󰇚"
-            selected: !!root.engine && root.engine.updateState === "available"
-            onTriggered: if (root.engine) root.engine.requestPluginUpdate()
+            text: root.tr("action.shareSkins", "Share skins")
+            iconText: "󰌹"
+            onTriggered: if (root.engine) root.engine.openShareSkins()
           }
 
           ActionButton {
@@ -1159,143 +1267,193 @@ Column {
     }
   }
 
-  // ---- Footer: stays put under the editing tabs -------------------------------
+  // ---- Contextual Draft Bar: appears on any tab while unsaved edits or a
+  // pasted skin are active, so trying a skin and saving or undoing happen in
+  // one place without cluttering clean tabs.
 
   Column {
     id: footer
     width: parent.width
     spacing: Style.spacing.sm
-    visible: root.craftTab && !!root.engine
+    visible: root.hasUnsavedDraft || root.hasOtherMainDraft
 
     O.PanelSeparator {
       width: parent.width
       foreground: root.fg
     }
 
-    RowLayout {
+    Column {
+      id: draftControls
       width: parent.width
       spacing: Style.spacing.sm
-
-      NavItem {
-        id: nameNav
-        navKey: "skinName"
-        inFooter: true
-        Layout.fillWidth: true
-        implicitHeight: Style.spacing.controlHeight
-        Layout.preferredHeight: implicitHeight
-        onActivate: nameField.forceActiveFocus()
-        onTextKey: function(t) {
-          nameField.forceActiveFocus()
-          nameField.insert(nameField.length, t)
+      visible: root.hasUnsavedDraft
+      onVisibleChanged: {
+        if (!visible && nameField.activeFocus) {
+          nameField.focus = false
+          root.restoreKeys()
         }
+      }
 
-        // The kit's field chrome around a LineField (see LineField.qml).
-        O.BorderSurface {
-          anchors.fill: parent
-          radius: Style.cornerRadius
-          color: Style.normalFillFor(root.fg, Kit.Color.accent)
-          borderSpec: Border.controlSpec(nameField.activeFocus ? "focus" : (nameNav.navFocused || nameHover.hovered ? "hover-cursor" : "normal"), root.fg, Kit.Color.accent)
+      RowLayout {
+        width: parent.width
+        spacing: Style.spacing.sm
 
-          HoverHandler {
-            id: nameHover
-            cursorShape: Qt.IBeamCursor
+        NavItem {
+          id: nameNav
+          navKey: "skinName"
+          inFooter: true
+          Layout.fillWidth: true
+          implicitHeight: Style.spacing.controlHeight
+          Layout.preferredHeight: implicitHeight
+          onActivate: nameField.forceActiveFocus()
+          onTextKey: function(t) {
+            nameField.forceActiveFocus()
+            nameField.insert(nameField.length, t)
           }
 
-          Item {
+          // The kit's field chrome around a LineField (see LineField.qml).
+          O.BorderSurface {
             anchors.fill: parent
-            anchors.leftMargin: Style.spacing.controlPaddingX
-            anchors.rightMargin: Style.spacing.controlPaddingX
-            clip: true
+            radius: Style.cornerRadius
+            color: Style.normalFillFor(root.fg, Kit.Color.accent)
+            borderSpec: Border.controlSpec(nameField.activeFocus ? "focus" : (nameNav.navFocused || nameHover.hovered ? "hover-cursor" : "normal"), root.fg, Kit.Color.accent)
 
-            Text {
-              anchors.verticalCenter: parent.verticalCenter
-              visible: nameField.text === ""
-              textFormat: Text.PlainText
-              text: root.tr("placeholder.skinName", "Save as skin name…")
-              color: Kit.Color.textFaint
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
+            HoverHandler {
+              id: nameHover
+              cursorShape: Qt.IBeamCursor
             }
 
-            LineField {
-              id: nameField
-              anchors.verticalCenter: parent.verticalCenter
-              color: root.fg
-              selectionColor: Style.selectionFillFor(root.fg, Kit.Color.accent)
-              font.family: Style.font.family
-              font.pixelSize: Style.font.body
-              maximumLength: 40
-              takesPaste: true
-              onPasteRequested: if (root.engine) root.engine.pasteInto(nameField)
-              onKeyPressed: function(event) {
-                if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                  event.accepted = true
-                  root.saveSkin()
-                  root.restoreKeys()
-                } else if (event.key === Qt.Key_Escape) {
-                  event.accepted = true
-                  root.restoreKeys()
+            Item {
+              anchors.fill: parent
+              anchors.leftMargin: Style.spacing.controlPaddingX
+              anchors.rightMargin: Style.spacing.controlPaddingX
+              clip: true
+
+              Text {
+                anchors.verticalCenter: parent.verticalCenter
+                visible: nameField.text === ""
+                textFormat: Text.PlainText
+                text: root.tr("placeholder.skinName", "Save as skin name…")
+                color: Kit.Color.textFaint
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+              }
+
+              LineField {
+                id: nameField
+                anchors.verticalCenter: parent.verticalCenter
+                color: root.fg
+                selectionColor: Style.selectionFillFor(root.fg, Kit.Color.accent)
+                font.family: Style.font.family
+                font.pixelSize: Style.font.body
+                maximumLength: 40
+                takesPaste: true
+                onPasteRequested: if (root.engine) root.engine.pasteInto(nameField)
+                onKeyPressed: function(event) {
+                  if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                    event.accepted = true
+                    root.saveSkin()
+                    root.restoreKeys()
+                  } else if (event.key === Qt.Key_Escape) {
+                    event.accepted = true
+                    root.restoreKeys()
+                  }
                 }
               }
             }
           }
         }
+
+        ActionButton {
+          navKey: "save"
+          inFooter: true
+          text: root.tr("action.save", "Save")
+          selected: nameField.text.trim().length > 0 || root.canUndoPasteHere
+          onTriggered: root.saveSkin()
+        }
       }
 
-      ActionButton {
-        navKey: "save"
-        inFooter: true
-        text: root.tr("action.save", "Save")
-        selected: nameField.text.trim().length > 0
-        onTriggered: root.saveSkin()
+      RowLayout {
+        width: parent.width
+        spacing: Style.spacing.sm
+
+        HintText {
+          Layout.fillWidth: true
+          text: root.canUndoPasteHere
+            ? root.tr("hint.pastedDraft", "Pasted skin — save to keep it, or undo to go back")
+            : root.tr("hint.editedDraft", "Unsaved edits — save as a skin, or reset")
+        }
+
+        ActionButton {
+          navKey: "undoPaste"
+          inFooter: true
+          visible: root.canUndoPasteHere
+          text: root.tr("action.undoPaste", "Undo paste")
+          iconText: "󰕌"
+          onTriggered: {
+            if (nameField.activeFocus) {
+              nameField.focus = false
+              root.restoreKeys()
+            }
+            if (root.engine) root.engine.undoPaste(root.screenTarget)
+          }
+        }
+
+        ActionButton {
+          navKey: "reset"
+          inFooter: true
+          visible: !root.canUndoPasteHere
+          text: root.tr("action.reset", "Reset")
+          iconText: "󰜉"
+          onTriggered: {
+            if (nameField.activeFocus) {
+              nameField.focus = false
+              root.restoreKeys()
+            }
+            if (root.engine) root.engine.resetTarget(root.screenTarget)
+          }
+        }
       }
     }
 
+    // Shown while editing a clean monitor when shared edits (Icon size, Glass
+    // blur) or earlier changes left an unsaved draft on the Main skin.
     RowLayout {
+      id: mainDraftNotice
       width: parent.width
       spacing: Style.spacing.sm
+      visible: root.hasOtherMainDraft
 
-      ActionButton {
-        navKey: "copy"
-        inFooter: true
-        text: root.tr("action.copyToml", "Copy TOML")
-        iconText: "󰆏"
-        onTriggered: if (root.engine) root.engine.copyToml(root.screenTarget)
+      HintText {
+        Layout.fillWidth: true
+        text: root.tr("hint.mainDraftPending", "Main skin has unsaved edits")
       }
 
       ActionButton {
-        navKey: "paste"
+        navKey: "editMainDraft"
         inFooter: true
-        text: root.tr("action.paste", "Paste skin")
-        iconText: "󰆒"
-        onTriggered: if (root.engine) root.engine.importFromClipboard(root.screenTarget)
+        text: root.tr("action.editMain", "Edit main")
+        onTriggered: {
+          root.selectScreenTarget("")
+          // This notice hides on Main; hand the cursor to Main's name field
+          // instead of leaving it on a hidden button.
+          root.moveCursorTo("skinName")
+        }
       }
-
-      Item { Layout.fillWidth: true }
 
       ActionButton {
-        navKey: "reset"
+        navKey: "resetMainDraft"
         inFooter: true
-        text: root.tr("action.reset", "Reset")
-        iconText: "󰜉"
-        onTriggered: if (root.engine) root.engine.resetTarget(root.screenTarget)
+        text: root.mainCanUndoPaste
+          ? root.tr("action.undoPaste", "Undo paste")
+          : root.tr("action.reset", "Reset")
+        iconText: root.mainCanUndoPaste ? "󰕌" : "󰜉"
+        onTriggered: {
+          if (!root.engine) return
+          if (root.mainCanUndoPaste) root.engine.undoPaste("")
+          else root.engine.resetTarget("")
+        }
       }
-    }
-
-    RowLayout {
-      width: parent.width
-      spacing: Style.spacing.sm
-      visible: !!root.engine && (root.engine.revision, root.engine.canUndoPasteFor(root.screenTarget))
-
-      ActionButton {
-        navKey: "undoPaste"
-        inFooter: true
-        text: root.tr("action.undoPaste", "Undo paste")
-        iconText: "󰕌"
-        onTriggered: if (root.engine) root.engine.undoPaste(root.screenTarget)
-      }
-
-      Item { Layout.fillWidth: true }
     }
   }
 
@@ -1579,200 +1737,45 @@ Column {
     id: action
     property string text: ""
     property string iconText: ""
+    property string tooltipText: ""
     property bool selected: false
+    property bool disabled: false
     signal triggered()
 
+    navEnabled: !disabled
     implicitWidth: actionButton.implicitWidth
     implicitHeight: actionButton.implicitHeight
     Layout.preferredWidth: implicitWidth
     Layout.preferredHeight: implicitHeight
     width: implicitWidth
     height: implicitHeight
-    onActivate: triggered()
+    onActivate: if (!disabled) triggered()
 
     O.Button {
       id: actionButton
       anchors.fill: parent
+      opacity: action.disabled ? 0.45 : 1
       text: action.text
       iconText: action.iconText
-      selected: action.selected
-      hasCursor: action.navFocused
+      tooltipText: action.disabled ? "" : action.tooltipText
+      selected: !action.disabled && action.selected
+      hasCursor: !action.disabled && action.navFocused
       bordered: true
-      onClicked: action.triggered()
-    }
-  }
-
-  // A skin as a compact tile on the kit's cursor surface: its thumbnail and
-  // name, the description a tooltip; hovering previews it on the bar.
-  component SkinCard: NavItem {
-    id: card
-    property var skinData: null
-    property string cardId: ""
-    property string title: ""
-    property string subtitle: ""
-    property bool userSkin: false
-    // The Omarchy tile: drawn as Omarchy's own bar.
-    property bool standardTile: false
-    readonly property bool chosen: root.chosenId() === cardId
-    readonly property bool hot: cardHover.hovered || navFocused
-    readonly property bool renaming: root.renamingId === cardId && userSkin
-    readonly property bool confirmingDelete: root.confirmDeleteId === cardId
-
-    navKey: "card:" + cardId
-    navGrid: true
-    navPreviewId: cardId
-    height: Style.space(52)
-
-    onActivate: root.pickSkin(cardId, userSkin)
-    onRemove: if (userSkin) root.requestDelete(cardId, title)
-    onTextKey: function(t) { if (userSkin && (t === "r" || t === "R")) root.startRename(cardId) }
-
-    HoverHandler {
-      id: cardHover
-      cursorShape: Qt.PointingHandCursor
-      onHoveredChanged: root.hoverPreview(card.cardId, hovered)
-    }
-
-    O.CursorSurface {
-      anchors.fill: parent
-      hasCursor: card.hot
-      current: card.chosen
-      bordered: true
-      foreground: root.fg
+      onClicked: if (!action.disabled) action.triggered()
     }
 
     MouseArea {
+      id: disabledShield
       anchors.fill: parent
-      acceptedButtons: Qt.LeftButton
-      onClicked: {
-        root.keyboardMode = false
-        root.navCurrent = card
-        root.pickSkin(card.cardId, card.userSkin)
-      }
-    }
-
-    Column {
-      anchors.fill: parent
-      anchors.margins: Style.space(6)
-      spacing: Style.space(5)
-
-      SkinThumbnail {
-        width: parent.width
-        height: Style.space(22)
-        skin: card.skinData
-        standard: card.standardTile
-        paletteMap: root.palette
-      }
-
-      RowLayout {
-        width: parent.width
-        spacing: Style.space(4)
-
-        Text {
-          visible: !card.renaming
-          Layout.fillWidth: true
-          textFormat: Text.PlainText
-          text: card.title
-          color: card.chosen ? Kit.Color.accent : root.fg
-          font.family: Style.font.family
-          font.pixelSize: Style.font.caption
-          font.bold: true
-          elide: Text.ElideRight
-        }
-
-        Item {
-          visible: card.renaming
-          Layout.fillWidth: true
-          Layout.preferredHeight: renameLoader.item ? renameLoader.item.implicitHeight : 0
-          clip: true
-
-          Loader {
-            id: renameLoader
-            active: card.renaming
-            width: parent.width
-            sourceComponent: Component {
-              Item {
-                implicitHeight: renameField.implicitHeight
-
-                LineField {
-                  id: renameField
-                  text: card.title
-                  maximumLength: 40
-                  takesPaste: true
-                  color: root.fg
-                  selectionColor: Style.selectionFillFor(root.fg, Kit.Color.accent)
-                  font.family: Style.font.family
-                  font.pixelSize: Style.font.caption
-                  Component.onCompleted: {
-                    forceActiveFocus()
-                    selectAll()
-                  }
-                  onPasteRequested: if (root.engine) root.engine.pasteInto(renameField)
-                  onActiveFocusChanged: if (!activeFocus) root.finishRename(card.cardId, text, false)
-                  onKeyPressed: function(event) {
-                    if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
-                      event.accepted = true
-                      root.finishRename(card.cardId, text, true)
-                    } else if (event.key === Qt.Key_Escape) {
-                      event.accepted = true
-                      root.finishRename(card.cardId, text, false)
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-
-        CardIcon {
-          visible: card.userSkin && (card.hot || card.confirmingDelete) && !card.renaming
-          glyph: "󰏫"
-          tip: root.tr("card.rename", "Rename (R)")
-          onTriggered: root.startRename(card.cardId)
-        }
-
-        CardIcon {
-          visible: card.userSkin && (card.hot || card.confirmingDelete) && !card.renaming
-          glyph: "󰆴"
-          danger: card.confirmingDelete
-          tip: root.tr("card.delete", "Delete (Del)")
-          onTriggered: root.requestDelete(card.cardId, card.title)
-        }
-      }
-    }
-
-    O.PanelToolTip {
-      visible: cardHover.hovered && card.subtitle !== "" && !card.renaming
-      delay: 500
-      text: card.subtitle
-    }
-  }
-
-  component CardIcon: Text {
-    id: icon
-    property string glyph: ""
-    property string tip: ""
-    property bool danger: false
-    signal triggered()
-
-    textFormat: Text.PlainText
-    text: glyph
-    color: danger ? Kit.Color.urgent : (iconMouse.containsMouse ? Kit.Color.accent : root.dimFg)
-    font.family: Style.font.family
-    font.pixelSize: Style.font.body
-
-    MouseArea {
-      id: iconMouse
-      anchors.fill: parent
-      anchors.margins: -Style.space(3)
+      visible: action.disabled
       hoverEnabled: true
-      cursorShape: Qt.PointingHandCursor
-      onClicked: icon.triggered()
+      cursorShape: Qt.ArrowCursor
     }
 
     O.PanelToolTip {
-      visible: iconMouse.containsMouse && icon.tip !== ""
-      text: icon.tip
+      visible: action.disabled && disabledShield.containsMouse && action.tooltipText !== ""
+      delay: 300
+      text: action.tooltipText
     }
   }
 }
